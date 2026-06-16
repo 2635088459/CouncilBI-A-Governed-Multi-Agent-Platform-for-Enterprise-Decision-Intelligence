@@ -23,6 +23,31 @@
 9. 数据层与存储设计
 10. 评估、审计、监控与运维设计
 
+### 2.1 总体架构图
+
+```mermaid
+flowchart TB
+   U[Business User / Analyst] --> FE[Frontend ChatBI]
+   FE --> API[Backend API Gateway]
+
+   API --> ORCH[Orchestrator]
+   ORCH --> SQLA[SQL Agent]
+   ORCH --> VISA[Visualization Agent]
+   ORCH --> ANAA[Analytics Agent]
+   ORCH --> RAGA[RAG Agent]
+   ORCH --> VERA[Verifier Agent]
+
+   SQLA --> GUARD[SQL Guardrail]
+   GUARD --> DB[(Business DB)]
+
+   RAGA --> VDB[(Vector DB)]
+   RAGA --> DOC[(Business Documents)]
+
+   API --> CACHE[(Redis Cache)]
+   API --> AUDIT[(Query History / Audit)]
+   ORCH --> OBS[(Tracing / Metrics / Logs)]
+```
+
 ---
 
 ## 3. 需要设计的系统部分

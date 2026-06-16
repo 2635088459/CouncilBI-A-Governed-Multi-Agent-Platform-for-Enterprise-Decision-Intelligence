@@ -23,6 +23,31 @@ It is recommended to split system design into the following 10 top-level domains
 9. Data layer and storage design
 10. Evaluation, audit, monitoring, and operations design
 
+### 2.1 Overall Architecture Diagram
+
+```mermaid
+flowchart TB
+   U[Business User / Analyst] --> FE[Frontend ChatBI]
+   FE --> API[Backend API Gateway]
+
+   API --> ORCH[Orchestrator]
+   ORCH --> SQLA[SQL Agent]
+   ORCH --> VISA[Visualization Agent]
+   ORCH --> ANAA[Analytics Agent]
+   ORCH --> RAGA[RAG Agent]
+   ORCH --> VERA[Verifier Agent]
+
+   SQLA --> GUARD[SQL Guardrail]
+   GUARD --> DB[(Business DB)]
+
+   RAGA --> VDB[(Vector DB)]
+   RAGA --> DOC[(Business Documents)]
+
+   API --> CACHE[(Redis Cache)]
+   API --> AUDIT[(Query History / Audit)]
+   ORCH --> OBS[(Tracing / Metrics / Logs)]
+```
+
 ---
 
 ## 3. System Parts That Need Design
