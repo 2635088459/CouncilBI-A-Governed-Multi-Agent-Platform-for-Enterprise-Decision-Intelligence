@@ -677,3 +677,87 @@ The project is not a simple chatbot. It demonstrates how LLMs can be integrated 
 
 ```
 ```
+
+---
+
+## 18. Minimal Overall Architecture Slice
+
+This repository now includes a small runnable slice for `spec/01-overall-architecture.spec.md`.
+
+In plain English, the current slice proves this workflow:
+
+```text
+API request
+  -> ChatBIApplication
+  -> SimpleOrchestrator
+  -> SimpleSqlGuardrail
+  -> InMemoryQueryHistory
+  -> API envelope response
+```
+
+The goal is not to finish the whole platform at once. The goal is to make one small architecture loop verifiable before adding more agents, databases, or LLM calls.
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `src/chatbi/core/contracts.py` | Core typed contracts: request, answer, trace, guardrail result, history record |
+| `src/chatbi/history/in_memory.py` | In-memory query history and replay by `trace_id` |
+| `src/chatbi/governance/simple_guardrail.py` | Minimal SQL guardrail: allow single `SELECT`, block dangerous statements |
+| `src/chatbi/orchestration/simple_orchestrator.py` | Routes request through guardrail, builds answer, saves history |
+| `src/chatbi/api/models.py` | API request/response payload and unified envelope models |
+| `src/chatbi/application/app.py` | Pure Python application facade |
+| `src/chatbi/api/http.py` | FastAPI app exposing `POST /api/v1/chat/query` |
+
+### Run Static Checks
+
+```bash
+python3 -m py_compile src/chatbi/*.py tests/*.py
+```
+
+### Install Dev Dependencies
+
+```bash
+python3 -m pip install -e ".[dev]"
+```
+
+### Run Tests
+
+```bash
+python3 -m pytest
+```
+
+### Run The HTTP API
+
+```bash
+python3 -m uvicorn chatbi.api.http:app --app-dir src --reload
+```
+
+Then call:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/chat/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "u_001",
+    "session_id": "s_001",
+    "question": "Show revenue trend.",
+    "locale": "en",
+    "role": "business_user"
+  }'
+```
+
+Expected shape:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "answer_text": "Revenue trend is ready.",
+    "sql_text": "SELECT month, revenue FROM revenue_by_month LIMIT 100"
+  },
+  "trace_id": "trc_...",
+  "warnings": []
+}
+```

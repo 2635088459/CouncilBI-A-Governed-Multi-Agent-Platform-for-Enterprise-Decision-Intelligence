@@ -142,15 +142,54 @@ Agent 输出标准字段：
 8. trace_id
 
 ## 10. 置信度聚合策略
-1. SQL 可信度权重 0.35。
-2. Verifier 结果权重 0.35。
-3. RAG 证据充分性权重 0.15。
-4. Analytics 稳定性权重 0.15。
+权重定义：
+1. SQL 可信度权重：0.35。
+2. Verifier 结果权重：0.35。
+3. RAG 证据充分性权重：0.15。
+4. Analytics 稳定性权重：0.15。
 
-总分计算：
-1. confidence = sum(weight_i * score_i)。
-2. confidence < 0.6 时必须添加高风险提示。
-3. confidence 在 0.6 到 0.8 时添加中风险提示。
+计算公式（仅对实际参与的 agent 做归一化加权平均）：
+
+```
+confidence = Σ(weight_i × score_i) / Σ(weight_i)
+```
+
+未参与当次任务的 agent 不计入分子和分母，避免"缺席 agent"稀释最终得分。
+
+最终结果保留 4 位小数。
+
+预警规则：
+1. confidence >= 0.6 → 无警告。
+2. confidence < 0.6 → 高风险警告："Answer confidence is below 0.60; human review is recommended."
+
+注意：当前实现只有一个阈值（0.60），不存在"中风险"档位。
+
+计算示例：
+
+示例 1 — WHY_EXPLANATION 任务（SQL + VERIFIER + RAG 参与）：
+- SQL score = 0.80，weight = 0.35
+- VERIFIER score = 0.90，weight = 0.35
+- RAG score = 0.70，weight = 0.15
+- confidence = (0.80×0.35 + 0.90×0.35 + 0.70×0.15) / (0.35 + 0.35 + 0.15)
+             = (0.280 + 0.315 + 0.105) / 0.85
+             = 0.700 / 0.85
+             ≈ 0.8235 → 无警告
+
+示例 2 — KPI_QUERY 任务（仅 SQL + VERIFIER 参与，无 RAG/Analytics）：
+- SQL score = 0.80，weight = 0.35
+- VERIFIER score = 0.90，weight = 0.35
+- confidence = (0.80×0.35 + 0.90×0.35) / (0.35 + 0.35)
+             = (0.280 + 0.315) / 0.70
+             = 0.595 / 0.70
+             ≈ 0.8500 → 无警告
+
+示例 3 — 低置信度场景：
+- SQL score = 0.40，weight = 0.35
+- VERIFIER score = 0.50，weight = 0.35
+- confidence = (0.40×0.35 + 0.50×0.35) / (0.35 + 0.35)
+             = (0.140 + 0.175) / 0.70
+             = 0.315 / 0.70
+             = 0.4500 → 触发高风险警告
 
 ## 11. 安全与治理
 1. Orchestrator 禁止直接执行数据库操作。

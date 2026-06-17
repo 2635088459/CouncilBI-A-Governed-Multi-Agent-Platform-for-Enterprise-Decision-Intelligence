@@ -148,10 +148,48 @@ Weights:
 3. RAG evidence sufficiency: 0.15.
 4. Analytics stability: 0.15.
 
-Scoring rules:
-1. confidence = sum(weight_i * score_i).
-2. confidence < 0.6 requires high-risk warning.
-3. confidence between 0.6 and 0.8 requires medium-risk warning.
+Formula (normalized weighted average over participating agents only):
+
+```
+confidence = Σ(weight_i × score_i) / Σ(weight_i)
+```
+
+Agents absent from a given task are excluded from both the numerator and denominator, preventing missing agents from diluting the score.
+
+Final value is rounded to 4 decimal places.
+
+Warning rule:
+1. confidence >= 0.6 → no warning.
+2. confidence < 0.6 → HIGH-RISK warning: "Answer confidence is below 0.60; human review is recommended."
+
+Note: there is no separate medium-risk tier. The single threshold is 0.60.
+
+Examples:
+
+Example 1 — WHY_EXPLANATION task (SQL + VERIFIER + RAG participate):
+- SQL score = 0.80, weight = 0.35
+- VERIFIER score = 0.90, weight = 0.35
+- RAG score = 0.70, weight = 0.15
+- confidence = (0.80×0.35 + 0.90×0.35 + 0.70×0.15) / (0.35 + 0.35 + 0.15)
+             = (0.280 + 0.315 + 0.105) / 0.85
+             = 0.700 / 0.85
+             ≈ 0.8235 → no warning
+
+Example 2 — KPI_QUERY task (SQL + VERIFIER participate, no RAG/Analytics):
+- SQL score = 0.80, weight = 0.35
+- VERIFIER score = 0.90, weight = 0.35
+- confidence = (0.80×0.35 + 0.90×0.35) / (0.35 + 0.35)
+             = (0.280 + 0.315) / 0.70
+             = 0.595 / 0.70
+             ≈ 0.8500 → no warning
+
+Example 3 — Low confidence scenario:
+- SQL score = 0.40, weight = 0.35
+- VERIFIER score = 0.50, weight = 0.35
+- confidence = (0.40×0.35 + 0.50×0.35) / (0.35 + 0.35)
+             = (0.140 + 0.175) / 0.70
+             = 0.315 / 0.70
+             = 0.4500 → HIGH-RISK warning triggered
 
 ## 11. Security and Governance
 1. Orchestrator must not execute DB operations directly.
