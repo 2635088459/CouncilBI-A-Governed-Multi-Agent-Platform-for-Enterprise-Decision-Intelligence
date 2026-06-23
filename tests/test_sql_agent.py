@@ -26,7 +26,7 @@ def test_sql_agent_returns_safe_sql_for_allowed_select() -> None:
 
     result = runner.run()
 
-    assert result.payload == {"safe_sql": "SELECT month, revenue FROM revenue_by_month"}
+    assert result.payload == {"safe_sql": "SELECT month, revenue FROM revenue_by_month LIMIT 100"}
     assert result.confidence == 0.9
 
 

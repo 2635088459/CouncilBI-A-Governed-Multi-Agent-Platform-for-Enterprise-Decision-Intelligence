@@ -12,6 +12,7 @@ from chatbi.core.contracts import (
     Locale,
     QueryAnswer,
     QueryHistoryRecord,
+    QueryHistoryStatus,
     QueryRequest,
     TableResult,
     UserRole,
@@ -135,3 +136,31 @@ def test_query_history_record_preserves_failed_request_for_replay() -> None:
     assert record.trace_id == trace_id
     assert record.request == request
     assert record.failed_error_code is ErrorCode.SQL_DENY_STATEMENT
+    assert record.status is QueryHistoryStatus.FAILED
+    assert record.sql_text is None
+
+
+def test_query_history_record_derives_success_status_and_sql_text() -> None:
+    trace_id = new_trace_id()
+    request = QueryRequest(
+        user_id="u_001",
+        session_id="s_001",
+        question="Show revenue trend.",
+        locale=Locale.EN,
+        role=UserRole.BUSINESS_USER,
+    )
+    answer = QueryAnswer(
+        answer_text="Revenue trend is ready.",
+        sql_text="SELECT month, revenue FROM revenue_by_month LIMIT 100",
+        table_result=TableResult(columns=("month", "revenue"), rows=()),
+        trace_id=trace_id,
+    )
+
+    record = QueryHistoryRecord(
+        trace_id=trace_id,
+        request=request,
+        answer=answer,
+    )
+
+    assert record.status is QueryHistoryStatus.SUCCEEDED
+    assert record.sql_text == "SELECT month, revenue FROM revenue_by_month LIMIT 100"

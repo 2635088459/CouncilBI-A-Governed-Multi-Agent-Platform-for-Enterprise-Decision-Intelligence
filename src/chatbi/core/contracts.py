@@ -41,6 +41,11 @@ class AgentStepStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class QueryHistoryStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class ErrorCode(StrEnum):
     SQL_DENY_STATEMENT = "SQL_DENY_STATEMENT"
     SQL_DENY_OBJECT = "SQL_DENY_OBJECT"
@@ -69,6 +74,10 @@ def new_trace_id() -> str:
     """Create the trace id required by every architecture-level response."""
 
     return f"trc_{uuid4().hex}"
+
+
+def new_agent_trace_id() -> str:
+    return f"agt_{uuid4().hex}"
 
 
 def utc_now() -> datetime:
@@ -104,6 +113,33 @@ class EvidenceItem:
     title: str
     citation_anchor: str
     snippet: str
+    publish_time: datetime | None = None
+    relevance_score: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.relevance_score <= 1.0:
+            raise ValueError("relevance_score must be between 0.0 and 1.0")
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalStats:
+    candidate_count: int
+    filtered_count: int
+    reranked_count: int
+    selected_count: int
+    latency_ms: float
+
+    def __post_init__(self) -> None:
+        counts = (
+            self.candidate_count,
+            self.filtered_count,
+            self.reranked_count,
+            self.selected_count,
+        )
+        if any(count < 0 for count in counts):
+            raise ValueError("retrieval counts must be greater than or equal to 0")
+        if self.latency_ms < 0:
+            raise ValueError("retrieval latency_ms must be greater than or equal to 0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +155,10 @@ class QueryAnswer:
     table_result: TableResult
     trace_id: str
     chart_spec: ChartSpec | None = None
+    analytics_result: Mapping[str, Any] | None = None
     evidence_list: tuple[EvidenceItem, ...] = ()
+    evidence_uncertainty: bool = False
+    retrieval_stats: RetrievalStats | None = None
     confidence: float = 1.0
     warnings: tuple[WarningMessage, ...] = ()
 
@@ -153,6 +192,7 @@ class AgentTraceEvent:
     occurred_at: datetime
     duration_ms: int | None = None
     summary: str | None = None
+    agent_trace_id: str = field(default_factory=new_agent_trace_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +202,18 @@ class QueryHistoryRecord:
     answer: QueryAnswer | None
     created_at: datetime = field(default_factory=utc_now)
     failed_error_code: ErrorCode | None = None
+    status: QueryHistoryStatus = field(init=False)
+    sql_text: str | None = field(init=False)
+
+    def __post_init__(self) -> None:
+        status = (
+            QueryHistoryStatus.FAILED
+            if self.failed_error_code is not None
+            else QueryHistoryStatus.SUCCEEDED
+        )
+        sql_text = self.answer.sql_text if self.answer is not None else None
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "sql_text", sql_text)
 
 
 class OrchestratorPort(Protocol):

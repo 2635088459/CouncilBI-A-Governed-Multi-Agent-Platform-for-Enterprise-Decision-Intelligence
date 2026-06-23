@@ -16,12 +16,14 @@ from chatbi.core.contracts import (
     QueryAnswer,
     QueryHistoryPort,
     QueryHistoryRecord,
+    QueryHistoryStatus,
     QueryRequest,
     TableResult,
     UserRole,
     WarningMessage,
     ensure_required_answer_fields,
     low_confidence_warning,
+    new_agent_trace_id,
     new_trace_id,
 )
 
@@ -41,11 +43,13 @@ __all__ = [
     "QueryAnswer",
     "QueryHistoryPort",
     "QueryHistoryRecord",
+    "QueryHistoryStatus",
     "QueryRequest",
     "TableResult",
     "UserRole",
     "WarningMessage",
     "ensure_required_answer_fields",
     "low_confidence_warning",
+    "new_agent_trace_id",
     "new_trace_id",
 ]

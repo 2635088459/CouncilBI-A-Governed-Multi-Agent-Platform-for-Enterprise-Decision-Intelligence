@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from chatbi.core.contracts import GuardrailPort, GuardrailResult, QueryRequest
+from chatbi.core.contracts import ErrorCode, GuardrailDecision, GuardrailPort, GuardrailResult, QueryRequest
 from chatbi.governance.simple_guardrail import SimpleSqlGuardrail
 from chatbi.semantic.catalog import SemanticCatalog, build_default_catalog
 from chatbi.semantic.question_parser import ParsedQuestion, QuestionParser
@@ -46,6 +46,18 @@ class SemanticNl2SqlPipeline:
                 guardrail_result=None,
                 clarification=self._clarification_message(parsed_question),
             )
+        if (
+            parsed_question.requested_field is not None
+            and parsed_question.requested_field.is_high_sensitivity
+        ):
+            return SemanticPipelineResult(
+                parsed_question=parsed_question,
+                generated_sql=None,
+                guardrail_result=self._high_sensitivity_denial(
+                    field_name=parsed_question.requested_field.name,
+                    trace_id=trace_id,
+                ),
+            )
         generated_sql = self._sql_generator.generate(parsed_question)
         guardrail_result = self._guardrail.check(
             sql_text=generated_sql.sql_text,
@@ -63,3 +75,14 @@ class SemanticNl2SqlPipeline:
             metric.name for metric in parsed_question.metric_candidates
         )
         return f"Please clarify which metric you mean: {candidate_names}."
+
+    def _high_sensitivity_denial(self, field_name: str, trace_id: str) -> GuardrailResult:
+        return GuardrailResult(
+            decision=GuardrailDecision.DENY,
+            trace_id=trace_id,
+            error_code=ErrorCode.SQL_DENY_OBJECT,
+            message=(
+                f"Field {field_name} is high-sensitivity and cannot be queried directly. "
+                "Ask for an approved aggregate metric instead."
+            ),
+        )

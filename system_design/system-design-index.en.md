@@ -2,7 +2,7 @@
 
 中文索引: [system-design-index.zh-CN.md](system-design-index.zh-CN.md)
 
-This page is the single entry point to the full 10-part system design set for the Governed Multi-Agent ChatBI Platform.
+This page is the single entry point to the full 10-part system design set for the Governed Multi-Agent ChatBI Platform. The v1 documents remain as detailed design baselines, and the v2 engineering upgrade documents add database integration, Docker-based local development, frontend/backend integration, Kubernetes deployment, and observability.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ flowchart TB
 	U[Business User / Analyst] --> FE[Frontend ChatBI]
 	FE --> API[Backend API Gateway]
 
-	API --> ORCH[Orchestrator]
+	API --> ORCH[Orchestrator / Worker]
 	ORCH --> SQLA[SQL Agent]
 	ORCH --> VISA[Visualization Agent]
 	ORCH --> ANAA[Analytics Agent]
@@ -30,15 +30,29 @@ flowchart TB
 	ORCH --> VERA[Verifier Agent]
 
 	SQLA --> GUARD[SQL Guardrail]
-	GUARD --> DB[(Business DB)]
+	GUARD --> DB[(PostgreSQL Business DB)]
 
-	RAGA --> VDB[(Vector DB)]
+	RAGA --> VDB[(pgvector / Vector DB)]
 	RAGA --> DOC[(Business Documents)]
 
 	API --> CACHE[(Redis Cache)]
 	API --> AUDIT[(Query History / Audit)]
 	ORCH --> OBS[(Tracing / Metrics / Logs)]
+	API --> K8S[Kubernetes / Docker Runtime]
 ```
+
+## v2 Engineering Upgrade Entry Points
+
+- 01 Overall Architecture v2: [English](01-overall-architecture/VERSION2.en.md) / [Chinese](01-overall-architecture/VERSION2.zh-CN.md)
+- 02 Agent Orchestration v2: [English](02-agent-orchestration-design/VERSION2.en.md) / [Chinese](02-agent-orchestration-design/VERSION2.zh-CN.md)
+- 03 Semantic Layer and NL2SQL v2: [English](03-semantic-layer-and-nl2sql/VERSION2.en.md) / [Chinese](03-semantic-layer-and-nl2sql/VERSION2.zh-CN.md)
+- 04 SQL Guardrail and Governance v2: [English](04-sql-guardrail-and-governance/VERSION2.en.md) / [Chinese](04-sql-guardrail-and-governance/VERSION2.zh-CN.md)
+- 05 Data Model v2: [English](05-data-model-design/VERSION2.en.md) / [Chinese](05-data-model-design/VERSION2.zh-CN.md)
+- 06 Backend API v2: [English](06-backend-api-design/VERSION2.en.md) / [Chinese](06-backend-api-design/VERSION2.zh-CN.md)
+- 07 Frontend ChatBI v2: [English](07-frontend-chatbi-design/VERSION2.en.md) / [Chinese](07-frontend-chatbi-design/VERSION2.zh-CN.md)
+- 08 RAG Retrieval and Evidence v2: [English](08-rag-design/VERSION2.en.md) / [Chinese](08-rag-design/VERSION2.zh-CN.md)
+- 09 Analytics and Forecasting v2: [English](09-analytics-and-forecasting-design/VERSION2.en.md) / [Chinese](09-analytics-and-forecasting-design/VERSION2.zh-CN.md)
+- 10 Evaluation and Observability v2: [English](10-evaluation-and-observability/VERSION2.en.md) / [Chinese](10-evaluation-and-observability/VERSION2.zh-CN.md)
 
 ## How to Use This Index
 

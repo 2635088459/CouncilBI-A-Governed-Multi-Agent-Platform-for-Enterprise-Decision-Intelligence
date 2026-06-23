@@ -1,6 +1,6 @@
 # Verification: 02 Agent Orchestration
 
-This document records the current machine-verifiable status for the first implementation slice based on `spec/02-agent-orchestration.spec.md`.
+This document records the current machine-verifiable status for the first implementation slice based on `spec/version1/02-agent-orchestration.spec.md`.
 
 ## Scope
 

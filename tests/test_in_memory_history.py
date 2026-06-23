@@ -3,6 +3,7 @@ from chatbi.core.contracts import (
     ErrorCode,
     Locale,
     QueryHistoryRecord,
+    QueryHistoryStatus,
     QueryRequest,
     UserRole,
     new_trace_id,
@@ -55,6 +56,7 @@ def test_history_preserves_failed_requests_for_audit_and_replay() -> None:
     assert replayed is not None
     assert replayed.request.question == "DROP TABLE orders"
     assert replayed.failed_error_code is ErrorCode.SQL_DENY_STATEMENT
+    assert replayed.status is QueryHistoryStatus.FAILED
 
 
 def test_history_lists_all_saved_records() -> None:
@@ -74,3 +76,24 @@ def test_history_lists_all_saved_records() -> None:
     store.save(second)
 
     assert store.list_all() == (first, second)
+
+
+def test_history_filters_records_by_status() -> None:
+    store = InMemoryQueryHistory()
+    succeeded = QueryHistoryRecord(
+        trace_id=new_trace_id(),
+        request=make_request("Show revenue."),
+        answer=None,
+    )
+    failed = QueryHistoryRecord(
+        trace_id=new_trace_id(),
+        request=make_request("DROP TABLE orders"),
+        answer=None,
+        failed_error_code=ErrorCode.SQL_DENY_STATEMENT,
+    )
+
+    store.save(succeeded)
+    store.save(failed)
+
+    assert store.list_by_status(QueryHistoryStatus.SUCCEEDED) == (succeeded,)
+    assert store.list_by_status(QueryHistoryStatus.FAILED) == (failed,)

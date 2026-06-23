@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from chatbi.semantic.catalog import MetricDefinition, MetricResolution, SemanticCatalog
+from chatbi.semantic.catalog import FieldDefinition, MetricDefinition, MetricResolution, SemanticCatalog
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +21,7 @@ class ParsedQuestion:
     time_range: TimeRange
     original_question: str
     metric_candidates: tuple[MetricDefinition, ...] = ()
+    requested_field: FieldDefinition | None = None
 
     @property
     def needs_clarification(self) -> bool:
@@ -41,6 +42,7 @@ class QuestionParser:
             time_range=self._resolve_time_range(question),
             original_question=question,
             metric_candidates=metric_resolution.candidates,
+            requested_field=self._resolve_field(question),
         )
 
     def _resolve_metric(self, question: str) -> MetricResolution:
@@ -48,6 +50,13 @@ class QuestionParser:
             if term in self._normalize(question):
                 return self._catalog.resolve_metric_candidates(term)
         return MetricResolution(metric=None)
+
+    def _resolve_field(self, question: str) -> FieldDefinition | None:
+        normalized_question = self._normalize(question)
+        for term in self._catalog.known_field_aliases():
+            if term in normalized_question:
+                return self._catalog.resolve_field(term)
+        return None
 
     def _resolve_time_range(self, question: str) -> TimeRange:
         normalized_question = self._normalize(question)

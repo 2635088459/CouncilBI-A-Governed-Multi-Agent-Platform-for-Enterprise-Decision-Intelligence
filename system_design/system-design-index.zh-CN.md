@@ -2,7 +2,7 @@
 
 English Index: [system-design-index.en.md](system-design-index.en.md)
 
-本页是 Governed Multi-Agent ChatBI Platform 10 份系统设计文档的统一入口。
+本页是 Governed Multi-Agent ChatBI Platform 10 份系统设计文档的统一入口。每个目录保留 v1 详细设计，并新增 v2 工程化升级设计，覆盖数据库接入、Docker、本地前后端联调、Kubernetes 部署与可观测性。
 
 ## 目录
 
@@ -22,7 +22,7 @@ flowchart TB
 	U[Business User / Analyst] --> FE[Frontend ChatBI]
 	FE --> API[Backend API Gateway]
 
-	API --> ORCH[Orchestrator]
+	API --> ORCH[Orchestrator / Worker]
 	ORCH --> SQLA[SQL Agent]
 	ORCH --> VISA[Visualization Agent]
 	ORCH --> ANAA[Analytics Agent]
@@ -30,15 +30,29 @@ flowchart TB
 	ORCH --> VERA[Verifier Agent]
 
 	SQLA --> GUARD[SQL Guardrail]
-	GUARD --> DB[(Business DB)]
+	GUARD --> DB[(PostgreSQL Business DB)]
 
-	RAGA --> VDB[(Vector DB)]
+	RAGA --> VDB[(pgvector / Vector DB)]
 	RAGA --> DOC[(Business Documents)]
 
 	API --> CACHE[(Redis Cache)]
 	API --> AUDIT[(Query History / Audit)]
 	ORCH --> OBS[(Tracing / Metrics / Logs)]
+	API --> K8S[Kubernetes / Docker Runtime]
 ```
+
+## v2 工程化升级入口
+
+- 01 总体架构 v2：[中文](01-overall-architecture/VERSION2.zh-CN.md) / [English](01-overall-architecture/VERSION2.en.md)
+- 02 多智能体编排 v2：[中文](02-agent-orchestration-design/VERSION2.zh-CN.md) / [English](02-agent-orchestration-design/VERSION2.en.md)
+- 03 语义层与 NL2SQL v2：[中文](03-semantic-layer-and-nl2sql/VERSION2.zh-CN.md) / [English](03-semantic-layer-and-nl2sql/VERSION2.en.md)
+- 04 SQL 安全与治理 v2：[中文](04-sql-guardrail-and-governance/VERSION2.zh-CN.md) / [English](04-sql-guardrail-and-governance/VERSION2.en.md)
+- 05 数据模型 v2：[中文](05-data-model-design/VERSION2.zh-CN.md) / [English](05-data-model-design/VERSION2.en.md)
+- 06 后端 API v2：[中文](06-backend-api-design/VERSION2.zh-CN.md) / [English](06-backend-api-design/VERSION2.en.md)
+- 07 前端 ChatBI v2：[中文](07-frontend-chatbi-design/VERSION2.zh-CN.md) / [English](07-frontend-chatbi-design/VERSION2.en.md)
+- 08 RAG 检索与证据解释 v2：[中文](08-rag-design/VERSION2.zh-CN.md) / [English](08-rag-design/VERSION2.en.md)
+- 09 分析与预测 v2：[中文](09-analytics-and-forecasting-design/VERSION2.zh-CN.md) / [English](09-analytics-and-forecasting-design/VERSION2.en.md)
+- 10 评估与可观测性 v2：[中文](10-evaluation-and-observability/VERSION2.zh-CN.md) / [English](10-evaluation-and-observability/VERSION2.en.md)
 
 ## 使用说明
 

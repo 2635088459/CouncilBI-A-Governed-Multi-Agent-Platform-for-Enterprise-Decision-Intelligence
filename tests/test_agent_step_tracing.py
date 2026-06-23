@@ -19,6 +19,9 @@ def test_tracer_records_start_and_success_events() -> None:
 
     assert result == "sql result"
     assert len(events) == 2
+    assert events[0].agent_trace_id.startswith("agt_")
+    assert events[1].agent_trace_id.startswith("agt_")
+    assert events[0].agent_trace_id != events[1].agent_trace_id
     assert events[0].status is AgentStepStatus.STARTED
     assert events[1].status is AgentStepStatus.SUCCEEDED
     assert events[1].duration_ms is not None
@@ -65,3 +68,27 @@ def test_tracer_records_skipped_agent_step() -> None:
     assert events[0].status is AgentStepStatus.SKIPPED
     assert events[0].duration_ms == 0
     assert events[0].summary == "SQL step timed out."
+
+
+def test_trace_log_lists_all_agent_trace_events() -> None:
+    trace_log = InMemoryAgentTraceLog()
+    tracer = AgentStepTracer(trace_log)
+    first_trace_id = new_trace_id()
+    second_trace_id = new_trace_id()
+
+    tracer.record_skipped(
+        trace_id=first_trace_id,
+        agent_name=AgentName.ANALYTICS,
+        summary="No forecast requested.",
+    )
+    tracer.record_skipped(
+        trace_id=second_trace_id,
+        agent_name=AgentName.RAG,
+        summary="No evidence requested.",
+    )
+
+    events = trace_log.list_all()
+
+    assert len(events) == 2
+    assert events[0].trace_id == first_trace_id
+    assert events[1].trace_id == second_trace_id

@@ -1,6 +1,6 @@
 # Verification: 03 Semantic Layer and NL2SQL
 
-This document records the current machine-verifiable status for the first implementation slice based on `spec/03-semantic-layer-and-nl2sql.spec.md`.
+This document records the current machine-verifiable status for the first implementation slice based on `spec/version1/03-semantic-layer-and-nl2sql.spec.md`.
 
 ## Scope
 

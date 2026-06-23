@@ -1,6 +1,6 @@
 # Spec Review Gate: Verifiable, Small-Step, TDD-Ready
 
-本文档用于审查 `spec/*.spec.md` 是否真的能被人和 AI 承接实现。审查目标不是判断规格“看起来像不像对的”，而是判断它是否能被验证、能被小步实现、能进入 TDD 红绿循环。
+本文档用于审查 `spec/version1/*.spec.md` 是否真的能被人和 AI 承接实现。审查目标不是判断规格“看起来像不像对的”，而是判断它是否能被验证、能被小步实现、能进入 TDD 红绿循环。
 
 ## 1. 审查结论
 
@@ -94,7 +94,7 @@ pytest: all tests green
 
 ## 4. 当前 Spec 覆盖缺口
 
-以下统计来自对 `spec/*.spec.md` 的 ID 和 Traceability Matrix 抽查。每个缺失项都必须补一个 AC 和 TC，或删除/降级该要求。
+以下统计来自对 `spec/version1/*.spec.md` 的 ID 和 Traceability Matrix 抽查。每个缺失项都必须补一个 AC 和 TC，或删除/降级该要求。
 
 | Spec | Missing traceability |
 |---|---|

@@ -1,5 +1,7 @@
 """Agent orchestration components."""
 
+from typing import TYPE_CHECKING
+
 from chatbi.orchestration.confidence import (
     CONFIDENCE_WEIGHTS,
     ConfidenceAggregationResult,
@@ -20,8 +22,10 @@ from chatbi.orchestration.routing import (
     QuestionClassifier,
     TaskType,
 )
-from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.orchestration.tracing import AgentStepTracer, InMemoryAgentTraceLog
+
+if TYPE_CHECKING:
+    from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 
 __all__ = [
     "AgentPlanStep",
@@ -42,3 +46,11 @@ __all__ = [
     "SimpleOrchestrator",
     "TaskType",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "SimpleOrchestrator":
+        from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
+
+        return SimpleOrchestrator
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

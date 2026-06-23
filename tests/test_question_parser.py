@@ -65,6 +65,19 @@ def test_question_parser_returns_none_for_unknown_metric() -> None:
     assert parsed.metric is None
 
 
+def test_question_parser_extracts_requested_field_from_question() -> None:
+    parser = QuestionParser(
+        catalog=build_default_catalog(),
+        today=date(2026, 6, 17),
+    )
+
+    parsed = parser.parse("Show customer id trend.")
+
+    assert parsed.requested_field is not None
+    assert parsed.requested_field.name == "user_id"
+    assert parsed.requested_field.is_high_sensitivity
+
+
 def test_question_parser_marks_ambiguous_metric_for_clarification() -> None:
     revenue = MetricDefinition(
         name="revenue",

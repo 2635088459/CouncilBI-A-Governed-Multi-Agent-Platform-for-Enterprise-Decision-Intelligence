@@ -1,6 +1,6 @@
 # Spec Master Index — Governed Multi-Agent ChatBI Platform
 
-This index covers all 10 system-level specs, each derived from the system design documents.
+This index covers all versioned system-level specs, each derived from the system design documents.
 Every spec follows SDD + TDD: scope → numbered requirements → contracts → acceptance criteria → test plan → traceability matrix.
 
 ---
@@ -19,24 +19,24 @@ Every spec follows SDD + TDD: scope → numbered requirements → contracts → 
 | Traceability Matrix | SDD+TDD | FR → AC → TC linkage |
 | Open Questions | Both | Pending decisions that affect design or tests |
 
-Before implementation, review each spec against [Spec Review Gate](spec-review-gate.md). A requirement is not implementation-ready until it maps to a type constraint, test case, benchmark, or compliance assertion.
+Before implementation, review each spec against [Spec Review Gate](version1/spec-review-gate.md). A requirement is not implementation-ready until it maps to a type constraint, test case, benchmark, or compliance assertion.
 
 ---
 
-## Spec Index
+## Version 1 Spec Index
 
 | # | File | System Part | Status |
 |---|---|---|---|
-| 01 | [01-overall-architecture.spec.md](01-overall-architecture.spec.md) | Overall Architecture | Draft |
-| 02 | [02-agent-orchestration.spec.md](02-agent-orchestration.spec.md) | Agent Orchestration | Draft |
-| 03 | [03-semantic-layer-and-nl2sql.spec.md](03-semantic-layer-and-nl2sql.spec.md) | Semantic Layer + NL2SQL | Draft |
-| 04 | [04-sql-guardrail-and-governance.spec.md](04-sql-guardrail-and-governance.spec.md) | SQL Guardrail + Governance | Draft |
-| 05 | [05-data-model.spec.md](05-data-model.spec.md) | Data Model | Draft |
-| 06 | [06-backend-api.spec.md](06-backend-api.spec.md) | Backend API | Draft |
-| 07 | [07-frontend-chatbi.spec.md](07-frontend-chatbi.spec.md) | Frontend ChatBI | Draft |
-| 08 | [08-rag.spec.md](08-rag.spec.md) | RAG Retrieval + Evidence | Draft |
-| 09 | [09-analytics-and-forecasting.spec.md](09-analytics-and-forecasting.spec.md) | Analytics + Forecasting | Draft |
-| 10 | [10-evaluation-and-observability.spec.md](10-evaluation-and-observability.spec.md) | Evaluation + Observability | Draft |
+| 01 | [01-overall-architecture.spec.md](version1/01-overall-architecture.spec.md) | Overall Architecture | Draft |
+| 02 | [02-agent-orchestration.spec.md](version1/02-agent-orchestration.spec.md) | Agent Orchestration | Draft |
+| 03 | [03-semantic-layer-and-nl2sql.spec.md](version1/03-semantic-layer-and-nl2sql.spec.md) | Semantic Layer + NL2SQL | Draft |
+| 04 | [04-sql-guardrail-and-governance.spec.md](version1/04-sql-guardrail-and-governance.spec.md) | SQL Guardrail + Governance | Draft |
+| 05 | [05-data-model.spec.md](version1/05-data-model.spec.md) | Data Model | Draft |
+| 06 | [06-backend-api.spec.md](version1/06-backend-api.spec.md) | Backend API | Draft |
+| 07 | [07-frontend-chatbi.spec.md](version1/07-frontend-chatbi.spec.md) | Frontend ChatBI | Draft |
+| 08 | [08-rag.spec.md](version1/08-rag.spec.md) | RAG Retrieval + Evidence | Draft |
+| 09 | [09-analytics-and-forecasting.spec.md](version1/09-analytics-and-forecasting.spec.md) | Analytics + Forecasting | Draft |
+| 10 | [10-evaluation-and-observability.spec.md](version1/10-evaluation-and-observability.spec.md) | Evaluation + Observability | Draft |
 
 ---
 

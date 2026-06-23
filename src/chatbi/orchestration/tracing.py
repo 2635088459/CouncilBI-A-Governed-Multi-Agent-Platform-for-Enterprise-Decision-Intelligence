@@ -29,6 +29,9 @@ class InMemoryAgentTraceLog:
     def list_by_trace_id(self, trace_id: str) -> tuple[AgentTraceEvent, ...]:
         return tuple(event for event in self._events if event.trace_id == trace_id)
 
+    def list_all(self) -> tuple[AgentTraceEvent, ...]:
+        return tuple(self._events)
+
 
 class AgentStepTracer:
     """Record start and terminal events around one agent step."""

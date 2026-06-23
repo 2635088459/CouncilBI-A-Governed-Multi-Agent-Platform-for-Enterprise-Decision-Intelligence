@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from chatbi.semantic.catalog import build_default_catalog
+from chatbi.semantic.catalog import MetricDefinition, build_default_catalog
 from chatbi.semantic.question_parser import ParsedQuestion, QuestionParser
 from chatbi.semantic.sql_generator import SqlTemplateGenerator
 
@@ -52,3 +52,30 @@ def test_sql_generator_requires_resolved_metric() -> None:
 
     with pytest.raises(ValueError, match="metric"):
         SqlTemplateGenerator().generate(unresolved)
+
+
+def test_sql_generator_uses_incremented_semantic_version_after_metric_definition_change() -> None:
+    catalog = build_default_catalog().with_updated_metric(
+        MetricDefinition(
+            name="revenue",
+            description="Total completed order amount.",
+            table_name="orders",
+            sql_expression="SUM(orders.order_amount) WHERE orders.status = 'completed'",
+            semantic_version="sem_v2",
+            synonyms=(
+                "sales amount",
+                "paid order amount",
+                "total sales",
+            ),
+        )
+    )
+    parser = QuestionParser(
+        catalog=catalog,
+        today=date(2026, 6, 17),
+    )
+    parsed = parser.parse("Show revenue trend.")
+
+    generated = SqlTemplateGenerator().generate(parsed)
+
+    assert "AND orders.status = 'completed'" in generated.sql_text
+    assert generated.semantic_version == "sem_v2"

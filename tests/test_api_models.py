@@ -1,5 +1,8 @@
 from chatbi.api.models import (
+    EvalRunResultPayload,
     ChatQueryRequestPayload,
+    observability_span_payload,
+    quality_dashboard_payload,
     success_envelope,
     to_chat_query_response,
 )
@@ -7,10 +10,18 @@ from chatbi.core.contracts import (
     ErrorCode,
     Locale,
     QueryAnswer,
+    RetrievalStats,
     TableResult,
     UserRole,
     WarningMessage,
     new_trace_id,
+)
+from chatbi.observability import (
+    AlertRuleId,
+    ObservabilitySpan,
+    SloStatus,
+    TraceSpanName,
+    TraceSpanStatus,
 )
 
 
@@ -42,6 +53,15 @@ def test_query_answer_converts_to_chat_query_response_payload() -> None:
             rows=({"month": "2026-01", "revenue": 1000},),
         ),
         trace_id=trace_id,
+        analytics_result={"forecast_result": {"model_used": "moving_average"}},
+        evidence_uncertainty=True,
+        retrieval_stats=RetrievalStats(
+            candidate_count=3,
+            filtered_count=2,
+            reranked_count=1,
+            selected_count=1,
+            latency_ms=12.5,
+        ),
         confidence=0.9,
     )
 
@@ -51,6 +71,9 @@ def test_query_answer_converts_to_chat_query_response_payload() -> None:
     assert response.sql_text == answer.sql_text
     assert response.table_result == answer.table_result
     assert response.trace_id == trace_id
+    assert response.analytics_result == answer.analytics_result
+    assert response.evidence_uncertainty is True
+    assert response.retrieval_stats == answer.retrieval_stats
     assert response.confidence == 0.9
 
 
@@ -63,6 +86,7 @@ def test_success_envelope_contains_trace_id_and_required_answer_fields() -> None
             rows=({"month": "2026-01", "revenue": 1000},),
         ),
         trace_id=new_trace_id(),
+        analytics_result={"anomaly_result": {"anomaly_level": "none"}},
     )
 
     envelope = success_envelope(to_chat_query_response(answer))
@@ -74,6 +98,9 @@ def test_success_envelope_contains_trace_id_and_required_answer_fields() -> None
     assert envelope.data["answer_text"] == answer.answer_text
     assert envelope.data["sql_text"] == answer.sql_text
     assert envelope.data["table_result"] == answer.table_result
+    assert envelope.data["analytics_result"] == answer.analytics_result
+    assert envelope.data["evidence_uncertainty"] is False
+    assert envelope.data["retrieval_stats"] is None
 
 
 def test_success_envelope_preserves_warnings() -> None:
@@ -97,3 +124,58 @@ def test_success_envelope_preserves_warnings() -> None:
 
     assert envelope.warnings == (warning,)
     assert envelope.trace_id == answer.trace_id
+
+
+def test_observability_span_payload_is_json_friendly() -> None:
+    span = ObservabilitySpan(
+        trace_id="trc_payload",
+        span_name=TraceSpanName.SQL_GENERATED,
+        status=TraceSpanStatus.SUCCEEDED,
+        duration_ms=3,
+        attributes={"sql_text": "SELECT 1"},
+    )
+
+    payload = observability_span_payload(span)
+
+    assert payload.trace_id == "trc_payload"
+    assert payload.span_name == "sql_generated"
+    assert payload.status == "succeeded"
+    assert isinstance(payload.occurred_at, str)
+    assert payload.duration_ms == 3
+    assert payload.attributes["sql_text"] == "SELECT 1"
+
+
+def test_quality_dashboard_payload_includes_slo_and_release_gate_summary() -> None:
+    dashboard = quality_dashboard_payload(
+        slo_statuses=(
+            SloStatus(
+                rule_id=AlertRuleId.E2E_ERROR_RATE,
+                endpoint="/api/v1/chat/query",
+                target=0.02,
+                observed_value=0.0,
+                passing=True,
+                sample_count=20,
+            ),
+        ),
+        alerts=(),
+        latest_eval_result=EvalRunResultPayload(
+            eval_run_id="eval_001",
+            eval_suite_id="backend_api_smoke",
+            total_cases=2,
+            passed_cases=2,
+            failed_cases=0,
+            overall_score=1.0,
+            average_confidence=0.9,
+            metric_breakdown={"sql_safety": 1.0},
+            failed_cases_detail=(),
+            release_gate_passed=True,
+        ),
+    )
+
+    assert dashboard.active_slo_count == 1
+    assert dashboard.slo_statuses[0]["rule_id"] == "e2e_error_rate"
+    assert dashboard.slo_statuses[0]["passing"] is True
+    assert dashboard.alerts == ()
+    assert dashboard.release_gate is not None
+    assert dashboard.release_gate["eval_run_id"] == "eval_001"
+    assert dashboard.release_gate["release_gate_passed"] is True

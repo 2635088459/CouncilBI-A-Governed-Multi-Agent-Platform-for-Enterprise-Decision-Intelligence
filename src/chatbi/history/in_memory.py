@@ -6,7 +6,7 @@ It follows QueryHistoryPort but deliberately avoids database concerns.
 
 from __future__ import annotations
 
-from chatbi.core.contracts import QueryHistoryRecord
+from chatbi.core.contracts import QueryHistoryRecord, QueryHistoryStatus
 
 
 class InMemoryQueryHistory:
@@ -23,3 +23,6 @@ class InMemoryQueryHistory:
 
     def list_all(self) -> tuple[QueryHistoryRecord, ...]:
         return tuple(self._records.values())
+
+    def list_by_status(self, status: QueryHistoryStatus) -> tuple[QueryHistoryRecord, ...]:
+        return tuple(record for record in self._records.values() if record.status is status)

@@ -2,7 +2,7 @@
 
 ## 1. 文档目的
 
-本文档基于主 README，列出本项目中所有需要单独进行系统设计的部分，作为后续架构设计、模块设计、接口设计、数据设计和评估设计的总清单。
+本文档基于主 README，列出本项目中所有需要单独进行系统设计的部分，作为后续架构设计、模块设计、接口设计、数据设计和评估设计的总清单。当前仓库已新增 v2 工程化升级设计，用于把初版逻辑框架推进到数据库连接、Docker、本地前后端联调、Kubernetes 部署和可观测运行。
 
 项目定位是一个面向企业决策智能的多智能体 ChatBI 平台，因此设计范围不能只覆盖“聊天问答”，还需要覆盖数据治理、安全治理、可解释性、评估、可观测性和工程落地。
 
@@ -23,14 +23,37 @@
 9. 数据层与存储设计
 10. 评估、审计、监控与运维设计
 
-### 2.1 总体架构图
+### 2.1 v2 工程化升级范围
+
+v2 设计在原有 10 个部分之上统一补齐以下生产化能力：
+
+1. 数据库：PostgreSQL 主存储、Redis 缓存、pgvector/向量库、migration、seed、备份。
+2. Docker：前端、后端、worker、数据库、缓存、向量检索的本地 Compose 拓扑。
+3. 前后端：统一 REST API、响应 envelope、trace id、长任务状态、历史回放。
+4. Kubernetes：Deployment、Service、Ingress、ConfigMap、Secret、probe、扩缩容。
+5. 观测治理：metrics、logs、traces、audit、eval runner、release gate。
+
+v2 文档入口：
+
+1. 总体架构 v2：[中文](01-overall-architecture/VERSION2.zh-CN.md) / [English](01-overall-architecture/VERSION2.en.md)
+2. 多智能体编排 v2：[中文](02-agent-orchestration-design/VERSION2.zh-CN.md) / [English](02-agent-orchestration-design/VERSION2.en.md)
+3. 语义层与 NL2SQL v2：[中文](03-semantic-layer-and-nl2sql/VERSION2.zh-CN.md) / [English](03-semantic-layer-and-nl2sql/VERSION2.en.md)
+4. SQL 安全与治理 v2：[中文](04-sql-guardrail-and-governance/VERSION2.zh-CN.md) / [English](04-sql-guardrail-and-governance/VERSION2.en.md)
+5. 数据模型 v2：[中文](05-data-model-design/VERSION2.zh-CN.md) / [English](05-data-model-design/VERSION2.en.md)
+6. 后端 API v2：[中文](06-backend-api-design/VERSION2.zh-CN.md) / [English](06-backend-api-design/VERSION2.en.md)
+7. 前端 ChatBI v2：[中文](07-frontend-chatbi-design/VERSION2.zh-CN.md) / [English](07-frontend-chatbi-design/VERSION2.en.md)
+8. RAG 检索与证据解释 v2：[中文](08-rag-design/VERSION2.zh-CN.md) / [English](08-rag-design/VERSION2.en.md)
+9. 分析与预测 v2：[中文](09-analytics-and-forecasting-design/VERSION2.zh-CN.md) / [English](09-analytics-and-forecasting-design/VERSION2.en.md)
+10. 评估与可观测性 v2：[中文](10-evaluation-and-observability/VERSION2.zh-CN.md) / [English](10-evaluation-and-observability/VERSION2.en.md)
+
+### 2.2 总体架构图
 
 ```mermaid
 flowchart TB
    U[Business User / Analyst] --> FE[Frontend ChatBI]
    FE --> API[Backend API Gateway]
 
-   API --> ORCH[Orchestrator]
+   API --> ORCH[Orchestrator / Worker]
    ORCH --> SQLA[SQL Agent]
    ORCH --> VISA[Visualization Agent]
    ORCH --> ANAA[Analytics Agent]
@@ -38,14 +61,15 @@ flowchart TB
    ORCH --> VERA[Verifier Agent]
 
    SQLA --> GUARD[SQL Guardrail]
-   GUARD --> DB[(Business DB)]
+   GUARD --> DB[(PostgreSQL Business DB)]
 
-   RAGA --> VDB[(Vector DB)]
+   RAGA --> VDB[(pgvector / Vector DB)]
    RAGA --> DOC[(Business Documents)]
 
    API --> CACHE[(Redis Cache)]
    API --> AUDIT[(Query History / Audit)]
    ORCH --> OBS[(Tracing / Metrics / Logs)]
+   API --> K8S[Kubernetes / Docker Runtime]
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document is based on the main README and lists all system parts that require dedicated design work. It serves as the master checklist for architecture design, module design, API design, data design, and evaluation design.
+This document is based on the main README and lists all system parts that require dedicated design work. It serves as the master checklist for architecture design, module design, API design, data design, and evaluation design. The repository now includes v2 engineering upgrade documents that move the initial framework toward database connectivity, Docker-based local development, frontend/backend integration, Kubernetes deployment, and observable runtime operations.
 
 The project is positioned as an enterprise decision-intelligence, multi-agent ChatBI platform. Therefore, the design scope should cover not only chat interaction, but also data governance, security governance, explainability, evaluation, observability, and engineering delivery.
 
@@ -23,14 +23,37 @@ It is recommended to split system design into the following 10 top-level domains
 9. Data layer and storage design
 10. Evaluation, audit, monitoring, and operations design
 
-### 2.1 Overall Architecture Diagram
+### 2.1 v2 Engineering Upgrade Scope
+
+The v2 design adds the following production-oriented capabilities across the 10 design areas:
+
+1. Database: PostgreSQL main storage, Redis cache, pgvector/vector store, migrations, seed data, and backups.
+2. Docker: local Compose topology for frontend, backend, worker, database, cache, and vector retrieval.
+3. Frontend/backend: unified REST API, response envelope, trace id, long-running task state, and history replay.
+4. Kubernetes: Deployments, Services, Ingress, ConfigMaps, Secrets, probes, and scaling.
+5. Observability and governance: metrics, logs, traces, audit, eval runner, and release gates.
+
+v2 document entry points:
+
+1. Overall Architecture v2: [English](01-overall-architecture/VERSION2.en.md) / [Chinese](01-overall-architecture/VERSION2.zh-CN.md)
+2. Agent Orchestration v2: [English](02-agent-orchestration-design/VERSION2.en.md) / [Chinese](02-agent-orchestration-design/VERSION2.zh-CN.md)
+3. Semantic Layer and NL2SQL v2: [English](03-semantic-layer-and-nl2sql/VERSION2.en.md) / [Chinese](03-semantic-layer-and-nl2sql/VERSION2.zh-CN.md)
+4. SQL Guardrail and Governance v2: [English](04-sql-guardrail-and-governance/VERSION2.en.md) / [Chinese](04-sql-guardrail-and-governance/VERSION2.zh-CN.md)
+5. Data Model v2: [English](05-data-model-design/VERSION2.en.md) / [Chinese](05-data-model-design/VERSION2.zh-CN.md)
+6. Backend API v2: [English](06-backend-api-design/VERSION2.en.md) / [Chinese](06-backend-api-design/VERSION2.zh-CN.md)
+7. Frontend ChatBI v2: [English](07-frontend-chatbi-design/VERSION2.en.md) / [Chinese](07-frontend-chatbi-design/VERSION2.zh-CN.md)
+8. RAG Retrieval and Evidence v2: [English](08-rag-design/VERSION2.en.md) / [Chinese](08-rag-design/VERSION2.zh-CN.md)
+9. Analytics and Forecasting v2: [English](09-analytics-and-forecasting-design/VERSION2.en.md) / [Chinese](09-analytics-and-forecasting-design/VERSION2.zh-CN.md)
+10. Evaluation and Observability v2: [English](10-evaluation-and-observability/VERSION2.en.md) / [Chinese](10-evaluation-and-observability/VERSION2.zh-CN.md)
+
+### 2.2 Overall Architecture Diagram
 
 ```mermaid
 flowchart TB
    U[Business User / Analyst] --> FE[Frontend ChatBI]
    FE --> API[Backend API Gateway]
 
-   API --> ORCH[Orchestrator]
+   API --> ORCH[Orchestrator / Worker]
    ORCH --> SQLA[SQL Agent]
    ORCH --> VISA[Visualization Agent]
    ORCH --> ANAA[Analytics Agent]
@@ -38,14 +61,15 @@ flowchart TB
    ORCH --> VERA[Verifier Agent]
 
    SQLA --> GUARD[SQL Guardrail]
-   GUARD --> DB[(Business DB)]
+   GUARD --> DB[(PostgreSQL Business DB)]
 
-   RAGA --> VDB[(Vector DB)]
+   RAGA --> VDB[(pgvector / Vector DB)]
    RAGA --> DOC[(Business Documents)]
 
    API --> CACHE[(Redis Cache)]
    API --> AUDIT[(Query History / Audit)]
    ORCH --> OBS[(Tracing / Metrics / Logs)]
+   API --> K8S[Kubernetes / Docker Runtime]
 ```
 
 ---

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TypeGuard, cast
+from typing import Mapping, TypeGuard, cast
 
-from chatbi.agents.analytics_agent import AnalyticsAgentRunner, AnalyticsModel
+from chatbi.agents.analytics_agent import (
+    AnalyticsAgentRunner,
+    AnalyticsModel,
+    TimeSeriesPoint,
+)
 from chatbi.agents.rag_agent import RagAgentRunner
 from chatbi.agents.sql_agent import SqlAgentRunner
 from chatbi.agents.verifier_agent import VerifierAgentRunner
@@ -19,12 +23,14 @@ from chatbi.core.contracts import (
     QueryAnswer,
     QueryHistoryRecord,
     QueryRequest,
+    RetrievalStats,
     TableResult,
     WarningMessage,
     new_trace_id,
 )
 from chatbi.governance.simple_guardrail import SimpleSqlGuardrail
 from chatbi.history.in_memory import InMemoryQueryHistory
+from chatbi.knowledge import InMemoryKnowledgeStore
 from chatbi.orchestration.executor import (
     PlanExecutor,
     PlanExecutionResult,
@@ -56,12 +62,14 @@ class SimpleOrchestrator:
         classifier: QuestionClassifier | None = None,
         plan_builder: ExecutionPlanBuilder | None = None,
         plan_executor: PlanExecutor | None = None,
+        knowledge_store: InMemoryKnowledgeStore | None = None,
     ) -> None:
         self._guardrail = guardrail or SimpleSqlGuardrail()
         self._history = history or InMemoryQueryHistory()
         self._classifier = classifier or QuestionClassifier()
         self._plan_builder = plan_builder or ExecutionPlanBuilder()
         self._plan_executor = plan_executor or PlanExecutor()
+        self._knowledge_store = knowledge_store
 
     @property
     def history(self) -> InMemoryQueryHistory:
@@ -107,7 +115,10 @@ class SimpleOrchestrator:
             confidence=execution_result.confidence,
             warnings=execution_result.warnings,
             chart_spec=self._chart_spec_from_execution(execution_result),
+            analytics_result=self._analytics_from_execution(execution_result),
             evidence_list=self._evidence_from_execution(execution_result),
+            evidence_uncertainty=self._evidence_uncertainty_from_execution(execution_result),
+            retrieval_stats=self._retrieval_stats_from_execution(execution_result),
         )
         self._history.save(
             QueryHistoryRecord(
@@ -150,17 +161,18 @@ class SimpleOrchestrator:
             AgentName.ANALYTICS: AnalyticsAgentRunner(
                 model=AnalyticsModel.MOVING_AVERAGE,
                 metric_name="revenue",
-                horizon_days=30,
+                horizon_days=3,
+                time_series=self._revenue_time_series(),
+                granularity="month",
+                trace_id=trace_id,
             ),
             AgentName.RAG: RagAgentRunner(
-                evidence_items=(
-                    EvidenceItem(
-                        source_id="doc_revenue_release_notes",
-                        title="Revenue release notes",
-                        citation_anchor="doc_revenue_release_notes#p1",
-                        snippet="Revenue changes were linked to campaign timing.",
-                    ),
-                ),
+                evidence_items=self._fallback_evidence_items(),
+                knowledge_store=self._knowledge_store,
+                question=request.question,
+                metric_context=sql_candidate,
+                user_role=request.role.value,
+                trace_id=trace_id,
             ),
             AgentName.VERIFIER: VerifierAgentRunner(
                 verified=True,
@@ -168,6 +180,19 @@ class SimpleOrchestrator:
                 reason="Mock answer passes baseline verification.",
             ),
         }
+
+    def _fallback_evidence_items(self) -> tuple[EvidenceItem, ...]:
+        if self._knowledge_store is not None:
+            return ()
+
+        return (
+            EvidenceItem(
+                source_id="doc_revenue_release_notes",
+                title="Revenue release notes",
+                citation_anchor="doc_revenue_release_notes#p1",
+                snippet="Revenue changes were linked to campaign timing.",
+            ),
+        )
 
     def _sql_denial_warning(self, execution_result: PlanExecutionResult) -> WarningMessage | None:
         for warning in execution_result.warnings:
@@ -222,6 +247,34 @@ class SimpleOrchestrator:
             return ()
         return evidence_items
 
+    def _evidence_uncertainty_from_execution(self, execution_result: PlanExecutionResult) -> bool:
+        rag_output = execution_result.outputs.get(AgentName.RAG)
+        if rag_output is None:
+            return False
+
+        uncertainty = rag_output.payload.get("uncertainty")
+        return uncertainty if isinstance(uncertainty, bool) else False
+
+    def _retrieval_stats_from_execution(
+        self,
+        execution_result: PlanExecutionResult,
+    ) -> RetrievalStats | None:
+        rag_output = execution_result.outputs.get(AgentName.RAG)
+        if rag_output is None:
+            return None
+
+        retrieval_stats = rag_output.payload.get("retrieval_stats")
+        return retrieval_stats if isinstance(retrieval_stats, RetrievalStats) else None
+
+    def _analytics_from_execution(
+        self,
+        execution_result: PlanExecutionResult,
+    ) -> Mapping[str, object] | None:
+        analytics_output = execution_result.outputs.get(AgentName.ANALYTICS)
+        if analytics_output is None:
+            return None
+        return analytics_output.payload
+
     def _build_sql_candidate(self, request: QueryRequest) -> str:
         stripped_question = request.question.strip()
         if self._looks_like_sql(stripped_question):
@@ -247,21 +300,24 @@ class SimpleOrchestrator:
         confidence: float,
         warnings: tuple[WarningMessage, ...],
         chart_spec: ChartSpec | None,
+        analytics_result: Mapping[str, object] | None,
         evidence_list: tuple[EvidenceItem, ...],
+        evidence_uncertainty: bool,
+        retrieval_stats: RetrievalStats | None,
     ) -> QueryAnswer:
         return QueryAnswer(
             answer_text="Revenue trend is ready.",
             sql_text=safe_sql,
             table_result=TableResult(
                 columns=("month", "revenue"),
-                rows=(
-                    {"month": "2026-01", "revenue": 1000},
-                    {"month": "2026-02", "revenue": 1120},
-                ),
+                rows=self._revenue_rows(),
             ),
             trace_id=trace_id,
             chart_spec=chart_spec,
+            analytics_result=analytics_result,
             evidence_list=evidence_list,
+            evidence_uncertainty=evidence_uncertainty,
+            retrieval_stats=retrieval_stats,
             confidence=confidence,
             warnings=warnings,
         )
@@ -290,3 +346,22 @@ class SimpleOrchestrator:
                 ),
             ),
         )
+
+    def _revenue_rows(self) -> tuple[Mapping[str, object], ...]:
+        return (
+            {"month": "2026-01", "revenue": 1000.0},
+            {"month": "2026-02", "revenue": 1120.0},
+            {"month": "2026-03", "revenue": 1180.0},
+            {"month": "2026-04", "revenue": 1210.0},
+            {"month": "2026-05", "revenue": 1290.0},
+            {"month": "2026-06", "revenue": 1350.0},
+        )
+
+    def _revenue_time_series(self) -> tuple[TimeSeriesPoint, ...]:
+        points: list[TimeSeriesPoint] = []
+        for row in self._revenue_rows():
+            month = row["month"]
+            revenue = row["revenue"]
+            if isinstance(month, str) and isinstance(revenue, int | float):
+                points.append(TimeSeriesPoint(timestamp=month, value=float(revenue)))
+        return tuple(points)

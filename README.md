@@ -2,6 +2,35 @@
 ---
 ---
 
+## System Design v2 Upgrade
+
+The project has moved from an initial framework design to a v2 engineering architecture. The v2 design adds concrete database connectivity, Docker-based local development, frontend/backend integration, Kubernetes deployment, and production observability.
+
+Key v2 architecture decisions:
+
+* PostgreSQL is the main store for business sample data, semantic catalog, query history, audit events, traces, and evaluation results.
+* Redis is used for session state, short-lived query status, cache, and rate-limit counters.
+* pgvector or an external vector database supports RAG document retrieval.
+* The frontend, backend API, agent orchestrator, async worker, database, cache, and vector layer are treated as deployable runtime components.
+* Docker Compose is the local development and demo path.
+* Kubernetes is the production deployment path using Deployments, Services, Ingress, ConfigMaps, Secrets, probes, and horizontal scaling.
+* Every end-to-end request should carry a trace id across frontend, backend, agents, SQL execution, RAG retrieval, audit, and evaluation.
+
+System design entry points:
+
+* [System Design Index](system_design/system-design-index.zh-CN.md)
+* [System Design Parts List](system_design/system-design-parts-list.md)
+* Overall Architecture v2: [English](system_design/01-overall-architecture/VERSION2.en.md) / [Chinese](system_design/01-overall-architecture/VERSION2.zh-CN.md)
+* Agent Orchestration v2: [English](system_design/02-agent-orchestration-design/VERSION2.en.md) / [Chinese](system_design/02-agent-orchestration-design/VERSION2.zh-CN.md)
+* Semantic Layer and NL2SQL v2: [English](system_design/03-semantic-layer-and-nl2sql/VERSION2.en.md) / [Chinese](system_design/03-semantic-layer-and-nl2sql/VERSION2.zh-CN.md)
+* SQL Guardrail and Governance v2: [English](system_design/04-sql-guardrail-and-governance/VERSION2.en.md) / [Chinese](system_design/04-sql-guardrail-and-governance/VERSION2.zh-CN.md)
+* Data Model v2: [English](system_design/05-data-model-design/VERSION2.en.md) / [Chinese](system_design/05-data-model-design/VERSION2.zh-CN.md)
+* Backend API v2: [English](system_design/06-backend-api-design/VERSION2.en.md) / [Chinese](system_design/06-backend-api-design/VERSION2.zh-CN.md)
+* Frontend ChatBI v2: [English](system_design/07-frontend-chatbi-design/VERSION2.en.md) / [Chinese](system_design/07-frontend-chatbi-design/VERSION2.zh-CN.md)
+* RAG Retrieval and Evidence v2: [English](system_design/08-rag-design/VERSION2.en.md) / [Chinese](system_design/08-rag-design/VERSION2.zh-CN.md)
+* Analytics and Forecasting v2: [English](system_design/09-analytics-and-forecasting-design/VERSION2.en.md) / [Chinese](system_design/09-analytics-and-forecasting-design/VERSION2.zh-CN.md)
+* Evaluation and Observability v2: [English](system_design/10-evaluation-and-observability/VERSION2.en.md) / [Chinese](system_design/10-evaluation-and-observability/VERSION2.zh-CN.md)
+
 ## 1. Project Background
 
 In real enterprise environments, business teams generate many data analysis requests every day. Product managers may want to understand why user activity dropped. Operations teams may want to know why revenue fluctuated in a specific region. Finance teams may want to forecast future revenue. Leadership teams may want to quickly identify abnormal KPI changes and understand the possible causes behind them.
@@ -682,7 +711,7 @@ The project is not a simple chatbot. It demonstrates how LLMs can be integrated 
 
 ## 18. Minimal Overall Architecture Slice
 
-This repository now includes a small runnable slice for `spec/01-overall-architecture.spec.md`.
+This repository now includes a small runnable slice for `spec/version1/01-overall-architecture.spec.md`.
 
 In plain English, the current slice proves this workflow:
 

@@ -74,3 +74,22 @@ def test_semantic_pipeline_returns_clarification_for_ambiguous_metric() -> None:
     assert result.generated_sql is None
     assert result.guardrail_result is None
     assert result.clarification == "Please clarify which metric you mean: revenue, gross_sales."
+
+
+def test_semantic_pipeline_denies_high_sensitivity_field_before_sql_generation() -> None:
+    pipeline = SemanticNl2SqlPipeline(today=date(2026, 6, 17))
+
+    result = pipeline.run(
+        request=make_request("Show customer id trend."),
+        trace_id=new_trace_id(),
+    )
+
+    assert result.parsed_question.requested_field is not None
+    assert result.parsed_question.requested_field.name == "user_id"
+    assert result.generated_sql is None
+    assert result.guardrail_result is not None
+    assert result.guardrail_result.decision is GuardrailDecision.DENY
+    assert result.guardrail_result.error_code is not None
+    assert result.guardrail_result.error_code.value == "SQL_DENY_OBJECT"
+    assert result.guardrail_result.message is not None
+    assert "high-sensitivity" in result.guardrail_result.message

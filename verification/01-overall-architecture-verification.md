@@ -1,6 +1,6 @@
 # Verification: 01 Overall Architecture
 
-This document records the current machine-verifiable status for the minimal implementation slice based on `spec/01-overall-architecture.spec.md`.
+This document records the current machine-verifiable status for the minimal implementation slice based on `spec/version1/01-overall-architecture.spec.md`.
 
 ## Scope
 
