@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 from chatbi.frontend.app_screen_model import AppScreenModel
 from chatbi.frontend.component_props import (
+    AnalyticsPageProps,
     CatalogPageProps,
     ChatPageProps,
     EvaluationPageProps,
@@ -42,6 +43,7 @@ class RenderRegion(StrEnum):
     CATALOG_DETAIL = "catalog_detail"
     TASK_STATUS_CARD = "task_status_card"
     EVALUATION_REPORT = "evaluation_report"
+    ANALYTICS_RESULT = "analytics_result"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +111,8 @@ def build_app_render_model(screen: AppScreenModel) -> AppRenderModel:
         elements.append(_history_list_element(screen.active_page))
     elif isinstance(screen.active_page, CatalogPageProps):
         elements.extend(_catalog_elements(screen.active_page))
+    elif isinstance(screen.active_page, AnalyticsPageProps):
+        elements.append(_analytics_result_element(screen.active_page))
     elif isinstance(screen.active_page, TaskStatusPageProps):
         elements.append(_task_status_element(screen.active_page))
     else:
@@ -174,6 +178,40 @@ def _task_status_element(props: TaskStatusPageProps) -> RenderElement:
             "status": props.status_card.status.value,
             "tone": props.status_card.tone,
         },
+    )
+
+
+def _analytics_result_element(props: AnalyticsPageProps) -> RenderElement:
+    if props.result is not None:
+        return RenderElement(
+            region=RenderRegion.ANALYTICS_RESULT,
+            component_id=ComponentId.ANALYTICS_RESULT,
+            visible=True,
+            text=props.result.method_label,
+            payload={
+                "trace_id": props.result.trace_id,
+                "metric_id": props.result.metric_id,
+                "forecast_points_label": props.result.forecast_points_label,
+                "warning_count_label": props.result.warning_count_label,
+            },
+        )
+    if props.task is not None:
+        return RenderElement(
+            region=RenderRegion.ANALYTICS_RESULT,
+            component_id=ComponentId.ANALYTICS_TASK,
+            visible=True,
+            text=props.task.label,
+            payload={
+                "task_id": props.task.task_id,
+                "trace_id": props.task.trace_id,
+                "status": props.task.status.value,
+            },
+        )
+    return RenderElement(
+        region=RenderRegion.ANALYTICS_RESULT,
+        component_id=ComponentId.ANALYTICS_RESULT,
+        visible=False,
+        text=props.empty_state,
     )
 
 

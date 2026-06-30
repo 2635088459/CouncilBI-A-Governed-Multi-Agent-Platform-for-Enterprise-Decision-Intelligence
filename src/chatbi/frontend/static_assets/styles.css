@@ -215,6 +215,45 @@ th {
   padding-left: 18px;
 }
 
+.analytics-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.analytics-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analytics-meta span {
+  border: 1px solid #cfdadd;
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #405257;
+  background: #f6fafb;
+  font-size: 13px;
+}
+
+.forecast-list {
+  display: grid;
+  gap: 8px;
+}
+
+.forecast-point {
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #dce5e8;
+  padding: 8px 0;
+}
+
+.forecast-point strong {
+  color: #12343b;
+}
+
 @media (max-width: 760px) {
   .app-shell,
   .result-grid,

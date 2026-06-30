@@ -87,9 +87,14 @@ def test_static_frontend_assets_include_minimum_browser_ui(
     assert "show monthly revenue" in app_js
     assert "Revenue trend is ready." in app_js
     assert "trc_fixture_success" in app_js
+    assert "Analytics" in app_js
+    assert "trc_fixture_analytics" in app_js
+    assert "analytics-v2-rule-based-001" in app_js
     assert "#chatbi-root" in app_js
     assert ".app-shell" in styles
     assert ".answer-card" in styles
+    assert ".analytics-panel" in styles
+    assert ".forecast-point" in styles
 
 
 def test_build_static_cli_writes_index_html_from_arguments(

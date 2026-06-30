@@ -1,19 +1,30 @@
 import pytest
 
 from chatbi.core.contracts import Locale, UserRole
-from chatbi.frontend.api_client import FrontendApiClient, FrontendUserContext
+from chatbi.frontend.api_client import (
+    FrontendAnalyticsResultViewModel,
+    FrontendApiClient,
+    FrontendUserContext,
+)
 from chatbi.frontend.api_fixtures import (
     partial_failure_chat_query_fixture,
     sql_guardrail_denied_fixture,
 )
-from chatbi.frontend.app_shell import FrontendAppShell
+from chatbi.frontend.app_shell import AppShellState, FrontendAppShell, FrontendRoute
+from chatbi.frontend.analytics_state import AnalyticsPageState
+from chatbi.frontend.app_screen_model import build_app_screen_model
+from chatbi.frontend.catalog_state import CatalogPageState
+from chatbi.frontend.chat_state import ChatPageState
+from chatbi.frontend.evaluation_state import EvaluationPageState
 from chatbi.frontend.fixture_transport import FixtureJsonTransport
+from chatbi.frontend.history_state import HistoryPageState
 from chatbi.frontend.render_model import (
     RenderRegion,
     build_app_render_model,
     build_chat_screen_render_model,
 )
 from chatbi.frontend.ui_answer_state import UiAnswerStatus
+from chatbi.frontend.task_status_page_state import TaskStatusPageState
 
 
 def test_successful_fixture_render_model_contains_answer_regions() -> None:
@@ -95,6 +106,49 @@ def test_app_render_model_includes_history_task_and_evaluation_regions() -> None
     assert _element_payload(task_model, RenderRegion.TASK_STATUS_CARD)["status"] == "completed"
     assert RenderRegion.EVALUATION_REPORT in evaluation_model.visible_regions()
     assert _element_payload(evaluation_model, RenderRegion.EVALUATION_REPORT)["tone"] == "success"
+
+
+def test_app_render_model_includes_analytics_result_region() -> None:
+    context = _context()
+    screen = build_app_screen_model(
+        AppShellState(
+            route=FrontendRoute.ANALYTICS,
+            chat=ChatPageState(context=context),
+            history=HistoryPageState(context=context),
+            catalog=CatalogPageState(context=context),
+            analytics=AnalyticsPageState(
+                context=context,
+                latest_result=FrontendAnalyticsResultViewModel(
+                    trace_id="tr_analytics_render",
+                    metric_id="revenue",
+                    semantic_version_id="sem_v2",
+                    method="rolling_zscore_linear_forecast",
+                    model_version="analytics-v2-rule-based-001",
+                    anomaly_points=(),
+                    forecast_points=(
+                        {
+                            "timestamp": "2026-06-04",
+                            "value": 115.0,
+                            "lower": 105.0,
+                            "upper": 125.0,
+                        },
+                    ),
+                    quality_warnings=(),
+                    explanation="Deterministic analytics result.",
+                ),
+            ),
+            task_status=TaskStatusPageState(context=context),
+            evaluation=EvaluationPageState(context=context),
+        ),
+        Locale.EN,
+    )
+    model = build_app_render_model(screen)
+
+    assert RenderRegion.ANALYTICS_RESULT in model.visible_regions()
+    assert _element_payload(model, RenderRegion.ANALYTICS_RESULT)["metric_id"] == "revenue"
+    assert _element_payload(model, RenderRegion.ANALYTICS_RESULT)["forecast_points_label"] == (
+        "Forecast points: 1"
+    )
 
 
 def test_app_render_model_includes_chat_regions_for_chat_route() -> None:

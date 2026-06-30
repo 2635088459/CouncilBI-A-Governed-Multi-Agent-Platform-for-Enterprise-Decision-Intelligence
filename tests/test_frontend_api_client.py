@@ -4,6 +4,7 @@ import pytest
 
 from chatbi.core.contracts import Locale, UserRole
 from chatbi.frontend.api_client import (
+    FrontendAnalyticsRequest,
     FrontendApiClient,
     FrontendUserContext,
     parse_api_envelope,
@@ -29,6 +30,27 @@ class FakeTransport:
         self.last_headers = headers
         self.last_body = body
         self.last_query = query
+        if path == "/api/v2/analytics/analyze":
+            return _analytics_envelope(
+                trace_id=str(body["trace_id"]),
+                request_id=str(headers["X-Request-Id"]),
+            )
+        if path == "/api/v2/analytics/tasks":
+            return {
+                "data": {
+                    "task_id": "task_analytics_001",
+                    "trace_id": body["trace_id"],
+                    "kind": "analytics",
+                    "status": "queued",
+                    "payload": {"request": body},
+                    "result": {},
+                    "error_message": None,
+                },
+                "warnings": [],
+                "error": None,
+                "trace_id": body["trace_id"],
+                "request_id": headers["X-Request-Id"],
+            }
         return _query_envelope(trace_id=str(headers["X-Trace-Id"]))
 
     def get_json(
@@ -78,6 +100,11 @@ class FakeTransport:
                 "trace_id": headers["X-Trace-Id"],
                 "request_id": headers["X-Request-Id"],
             }
+        if path.startswith("/api/v2/analytics/results/"):
+            return _analytics_envelope(
+                trace_id=path.rsplit("/", 1)[-1],
+                request_id=str(headers["X-Request-Id"]),
+            )
         return {
             "code": 0,
             "message": "ok",
@@ -208,6 +235,56 @@ def test_load_task_status_calls_backend_task_endpoint() -> None:
     assert status.result["chunk_count"] == 2
 
 
+def test_analyze_metric_calls_v2_analytics_endpoint() -> None:
+    transport = FakeTransport()
+    client = FrontendApiClient(transport)
+
+    result = client.analyze_metric(
+        context=_context(),
+        request=_analytics_request("tr_frontend_analytics"),
+    )
+
+    assert transport.last_path == "/api/v2/analytics/analyze"
+    assert transport.last_body is not None
+    assert transport.last_body["metric_id"] == "revenue"
+    assert transport.last_body["analysis_options"] == {
+        "horizon": 2,
+        "anomaly_z_threshold": 3.0,
+    }
+    assert result.trace_id == "tr_frontend_analytics"
+    assert result.method == "rolling_zscore_linear_forecast"
+    assert len(result.forecast_points) == 2
+
+
+def test_enqueue_analytics_returns_task_status_view_model() -> None:
+    transport = FakeTransport()
+    client = FrontendApiClient(transport)
+
+    status = client.enqueue_analytics(
+        context=_context(),
+        request=_analytics_request("tr_frontend_analytics_task"),
+    )
+
+    assert transport.last_path == "/api/v2/analytics/tasks"
+    assert status.task_id == "task_analytics_001"
+    assert status.kind == "analytics"
+    assert status.status.value == "queued"
+
+
+def test_load_analytics_result_calls_v2_result_endpoint() -> None:
+    transport = FakeTransport()
+    client = FrontendApiClient(transport)
+
+    result = client.load_analytics_result(
+        context=_context(),
+        trace_id="tr_frontend_analytics_lookup",
+    )
+
+    assert transport.last_path == "/api/v2/analytics/results/tr_frontend_analytics_lookup"
+    assert result.trace_id == "tr_frontend_analytics_lookup"
+    assert result.model_version == "analytics-v2-rule-based-001"
+
+
 def test_run_evaluation_calls_backend_eval_run() -> None:
     class EvalTransport(FakeTransport):
         def post_json(
@@ -320,4 +397,57 @@ def _query_envelope(trace_id: str) -> Mapping[str, Any]:
             "evidence_list": [],
             "confidence": 0.9,
         },
+    }
+
+
+def _analytics_request(trace_id: str) -> FrontendAnalyticsRequest:
+    return FrontendAnalyticsRequest(
+        trace_id=trace_id,
+        metric_id="revenue",
+        semantic_version_id="sem_v2",
+        time_column="date",
+        value_column="revenue",
+        grain="day",
+        rows=(
+            {"date": "2026-06-01", "revenue": 100.0},
+            {"date": "2026-06-02", "revenue": 105.0},
+            {"date": "2026-06-03", "revenue": 110.0},
+        ),
+        horizon=2,
+    )
+
+
+def _analytics_envelope(trace_id: str, request_id: str) -> Mapping[str, Any]:
+    return {
+        "data": {
+            "trace_id": trace_id,
+            "metric_id": "revenue",
+            "semantic_version_id": "sem_v2",
+            "result": {
+                "anomaly_points": [],
+                "forecast_points": [
+                    {
+                        "timestamp": "2026-06-04",
+                        "value": 115.0,
+                        "lower": 105.0,
+                        "upper": 125.0,
+                    },
+                    {
+                        "timestamp": "2026-06-05",
+                        "value": 120.0,
+                        "lower": 110.0,
+                        "upper": 130.0,
+                    },
+                ],
+                "confidence_interval": {"lower": 105.0, "upper": 130.0},
+                "quality_warnings": [],
+                "method": "rolling_zscore_linear_forecast",
+                "model_version": "analytics-v2-rule-based-001",
+                "explanation": "Deterministic analytics result.",
+            },
+        },
+        "warnings": [],
+        "error": None,
+        "trace_id": trace_id,
+        "request_id": request_id,
     }

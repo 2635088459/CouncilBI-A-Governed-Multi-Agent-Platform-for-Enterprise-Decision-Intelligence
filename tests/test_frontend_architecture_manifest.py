@@ -18,6 +18,7 @@ def test_frontend_architecture_manifest_maps_pages_to_api_paths_and_regions() ->
     chat = manifest.page_for_route(FrontendRoute.CHAT)
     history = manifest.page_for_route(FrontendRoute.HISTORY)
     catalog = manifest.page_for_route(FrontendRoute.CATALOG)
+    analytics = manifest.page_for_route(FrontendRoute.ANALYTICS)
     task_status = manifest.page_for_route(FrontendRoute.TASK_STATUS)
 
     assert chat.api_paths == ("/api/v1/chat/query",)
@@ -29,6 +30,14 @@ def test_frontend_architecture_manifest_maps_pages_to_api_paths_and_regions() ->
         RenderRegion.CATALOG_LIST,
         RenderRegion.CATALOG_DETAIL,
     )
+    assert analytics.api_paths == (
+        "/api/v2/analytics/analyze",
+        "/api/v2/analytics/tasks",
+        "/api/v2/analytics/results/{trace_id}",
+    )
+    assert analytics.render_regions == (RenderRegion.ANALYTICS_RESULT,)
+    assert analytics.state_module == "chatbi.frontend.analytics_state"
+    assert analytics.props_builder == "build_analytics_page_props"
     assert task_status.api_paths == ("/api/v1/chat/tasks/{task_id}",)
 
 

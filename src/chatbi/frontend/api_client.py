@@ -123,6 +123,47 @@ class EvaluationRunViewModel:
     release_gate_passed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class FrontendAnalyticsRequest:
+    trace_id: str
+    metric_id: str
+    semantic_version_id: str
+    time_column: str
+    value_column: str
+    grain: str
+    rows: tuple[Mapping[str, Any], ...]
+    horizon: int = 3
+    anomaly_z_threshold: float = 3.0
+
+    def as_body(self) -> Mapping[str, Any]:
+        return {
+            "trace_id": self.trace_id,
+            "metric_id": self.metric_id,
+            "semantic_version_id": self.semantic_version_id,
+            "time_column": self.time_column,
+            "value_column": self.value_column,
+            "grain": self.grain,
+            "rows": self.rows,
+            "analysis_options": {
+                "horizon": self.horizon,
+                "anomaly_z_threshold": self.anomaly_z_threshold,
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FrontendAnalyticsResultViewModel:
+    trace_id: str
+    metric_id: str
+    semantic_version_id: str
+    method: str
+    model_version: str
+    anomaly_points: tuple[Mapping[str, Any], ...]
+    forecast_points: tuple[Mapping[str, Any], ...]
+    quality_warnings: tuple[str, ...]
+    explanation: str
+
+
 class FrontendApiClient:
     def __init__(
         self,
@@ -264,6 +305,53 @@ class FrontendApiClient:
         _raise_if_error_envelope(parsed)
         return build_task_status_view_model(_data(parsed), context.locale)
 
+    def analyze_metric(
+        self,
+        context: FrontendUserContext,
+        request: FrontendAnalyticsRequest,
+    ) -> FrontendAnalyticsResultViewModel:
+        """POST analytics v2 request and return the typed frontend result."""
+
+        envelope = self._transport.post_json(
+            path="/api/v2/analytics/analyze",
+            headers=_headers(context=context, trace_id=request.trace_id),
+            body=request.as_body(),
+        )
+        parsed = parse_api_envelope(envelope)
+        _raise_if_error_envelope(parsed)
+        return _analytics_result_view_model(_data(parsed))
+
+    def enqueue_analytics(
+        self,
+        context: FrontendUserContext,
+        request: FrontendAnalyticsRequest,
+    ) -> TaskStatusViewModel:
+        """POST analytics v2 request as a long-running task."""
+
+        envelope = self._transport.post_json(
+            path="/api/v2/analytics/tasks",
+            headers=_headers(context=context, trace_id=request.trace_id),
+            body=request.as_body(),
+        )
+        parsed = parse_api_envelope(envelope)
+        _raise_if_error_envelope(parsed)
+        return build_task_status_view_model(_data(parsed), context.locale)
+
+    def load_analytics_result(
+        self,
+        context: FrontendUserContext,
+        trace_id: str,
+    ) -> FrontendAnalyticsResultViewModel:
+        """GET one persisted analytics v2 result by trace id."""
+
+        envelope = self._transport.get_json(
+            path=f"/api/v2/analytics/results/{trace_id}",
+            headers=_headers(context=context, trace_id=trace_id),
+        )
+        parsed = parse_api_envelope(envelope)
+        _raise_if_error_envelope(parsed)
+        return _analytics_result_view_model(_data(parsed))
+
     def run_evaluation(
         self,
         context: FrontendUserContext,
@@ -398,6 +486,33 @@ def _data(envelope: FrontendApiEnvelope) -> Mapping[str, Any]:
     return _mapping(envelope.data, field_name="data")
 
 
+def _analytics_result_view_model(data: Mapping[str, Any]) -> FrontendAnalyticsResultViewModel:
+    result = _mapping(data.get("result"), field_name="data.result")
+    return FrontendAnalyticsResultViewModel(
+        trace_id=_string(data.get("trace_id"), field_name="data.trace_id"),
+        metric_id=_string(data.get("metric_id"), field_name="data.metric_id"),
+        semantic_version_id=_string(
+            data.get("semantic_version_id"),
+            field_name="data.semantic_version_id",
+        ),
+        method=_string(result.get("method"), field_name="result.method"),
+        model_version=_string(result.get("model_version"), field_name="result.model_version"),
+        anomaly_points=_list(
+            result.get("anomaly_points", ()),
+            field_name="result.anomaly_points",
+        ),
+        forecast_points=_list(
+            result.get("forecast_points", ()),
+            field_name="result.forecast_points",
+        ),
+        quality_warnings=_string_tuple(
+            result.get("quality_warnings", ()),
+            field_name="result.quality_warnings",
+        ),
+        explanation=_string(result.get("explanation"), field_name="result.explanation"),
+    )
+
+
 def _optional_mapping(value: object, field_name: str) -> Mapping[str, Any] | None:
     if value is None:
         return None
@@ -415,6 +530,15 @@ def _list(value: object, field_name: str) -> tuple[Mapping[str, Any], ...]:
         raise ValueError(f"{field_name} must be a list")
     items = cast(tuple[object, ...] | list[object], value)
     return tuple(_mapping(item, field_name=field_name) for item in items)
+
+
+def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, list) and not isinstance(value, tuple):
+        raise ValueError(f"{field_name} must be a list")
+    items = cast(tuple[object, ...] | list[object], value)
+    if not all(isinstance(item, str) for item in items):
+        raise ValueError(f"{field_name} must contain strings")
+    return cast(tuple[str, ...], tuple(items))
 
 
 def _optional_string(value: object, field_name: str) -> str | None:

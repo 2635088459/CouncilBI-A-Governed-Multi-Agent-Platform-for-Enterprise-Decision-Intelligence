@@ -20,7 +20,21 @@ const fixtureAnswer = {
   ],
 };
 
+const fixtureAnalytics = {
+  traceId: "trc_fixture_analytics",
+  metricId: "revenue",
+  method: "linear_regression",
+  modelVersion: "analytics-v2-rule-based-001",
+  forecast: [
+    { period: "2026-04", value: "$164,800" },
+    { period: "2026-05", value: "$176,400" },
+    { period: "2026-06", value: "$188,000" },
+  ],
+  warnings: ["Forecast uses fixture data for browser prototype mode."],
+};
+
 const root = document.querySelector("#chatbi-root");
+let activeRoute = "chat";
 
 function renderApp() {
   if (!root) {
@@ -32,11 +46,12 @@ function renderApp() {
       <aside class="sidebar" aria-label="Primary navigation">
         <div class="brand">InsightOps AI</div>
         <nav class="nav-list">
-          <button class="nav-item is-active" type="button">Chat</button>
-          <button class="nav-item" type="button">History</button>
-          <button class="nav-item" type="button">Catalog</button>
-          <button class="nav-item" type="button">Task</button>
-          <button class="nav-item" type="button">Evaluation</button>
+          ${renderNavItem("chat", "Chat")}
+          ${renderNavItem("history", "History")}
+          ${renderNavItem("catalog", "Catalog")}
+          ${renderNavItem("analytics", "Analytics")}
+          ${renderNavItem("task", "Task")}
+          ${renderNavItem("evaluation", "Evaluation")}
         </nav>
       </aside>
       <main class="workspace">
@@ -45,23 +60,17 @@ function renderApp() {
           <span>${escapeText(runtimeConfig.environment)}</span>
           <span>${escapeText(runtimeConfig.locale_default)}</span>
         </section>
-        <section class="chat-panel" aria-label="Chat workspace">
-          <div class="question-row">
-            <input
-              id="question-input"
-              class="question-input"
-              value="${escapeText(fixtureAnswer.question)}"
-              aria-label="Ask a business question"
-            >
-            <button id="submit-question" class="send-button" type="button">Submit</button>
-          </div>
-          <div id="answer-region" class="answer-region">
-            ${renderAnswer(fixtureAnswer)}
-          </div>
-        </section>
+        ${renderActivePage()}
       </main>
     </div>
   `;
+
+  document.querySelectorAll("[data-route]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activeRoute = button.getAttribute("data-route") || "chat";
+      renderApp();
+    });
+  });
 
   document.querySelector("#submit-question")?.addEventListener("click", () => {
     const input = document.querySelector("#question-input");
@@ -72,6 +81,38 @@ function renderApp() {
       answerRegion.innerHTML = renderAnswer(nextAnswer);
     }
   });
+}
+
+function renderNavItem(route, label) {
+  const activeClass = activeRoute === route ? " is-active" : "";
+  return `
+    <button class="nav-item${activeClass}" type="button" data-route="${escapeText(route)}">
+      ${escapeText(label)}
+    </button>
+  `;
+}
+
+function renderActivePage() {
+  if (activeRoute === "analytics") {
+    return renderAnalytics(fixtureAnalytics);
+  }
+
+  return `
+    <section class="chat-panel" aria-label="Chat workspace">
+      <div class="question-row">
+        <input
+          id="question-input"
+          class="question-input"
+          value="${escapeText(fixtureAnswer.question)}"
+          aria-label="Ask a business question"
+        >
+        <button id="submit-question" class="send-button" type="button">Submit</button>
+      </div>
+      <div id="answer-region" class="answer-region">
+        ${renderAnswer(fixtureAnswer)}
+      </div>
+    </section>
+  `;
 }
 
 function renderAnswer(answer) {
@@ -124,6 +165,49 @@ function renderAnswer(answer) {
         </ul>
       </section>
     </article>
+  `;
+}
+
+function renderAnalytics(analytics) {
+  return `
+    <section class="analytics-panel" aria-label="Analytics workspace">
+      <article class="answer-card">
+        <div class="answer-header">
+          <div>
+            <p class="eyebrow">Analytics</p>
+            <h1>${escapeText(analytics.metricId)} forecast is ready.</h1>
+          </div>
+          <button class="trace-button" type="button" title="Copy trace id">
+            ${escapeText(analytics.traceId)}
+          </button>
+        </div>
+        <div class="analytics-meta">
+          <span>Method ${escapeText(analytics.method)}</span>
+          <span>Model ${escapeText(analytics.modelVersion)}</span>
+        </div>
+        <section class="result-section" aria-label="Forecast result">
+          <h2>Forecast</h2>
+          <div class="forecast-list">
+            ${analytics.forecast
+              .map(
+                (point) => `
+                  <div class="forecast-point">
+                    <span>${escapeText(point.period)}</span>
+                    <strong>${escapeText(point.value)}</strong>
+                  </div>
+                `,
+              )
+              .join("")}
+          </div>
+        </section>
+        <section class="evidence" aria-label="Analytics warnings">
+          <h2>Warnings</h2>
+          <ul>
+            ${analytics.warnings.map((item) => `<li>${escapeText(item)}</li>`).join("")}
+          </ul>
+        </section>
+      </article>
+    </section>
   `;
 }
 

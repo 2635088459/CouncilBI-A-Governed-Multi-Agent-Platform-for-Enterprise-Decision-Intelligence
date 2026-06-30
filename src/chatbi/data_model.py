@@ -457,6 +457,67 @@ def _build_knowledge_retrieval_tables() -> tuple[TableDefinition, ...]:
                 ColumnDefinition("embedding_vector", "vector", nullable=False),
             ),
         ),
+        TableDefinition(
+            name="rag.documents",
+            domain=DataDomain.KNOWLEDGE_RETRIEVAL,
+            columns=(
+                ColumnDefinition("document_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("source", "string", nullable=False),
+                ColumnDefinition("title", "string", nullable=False),
+                ColumnDefinition("document_type", "string", nullable=False),
+                ColumnDefinition("published_at", "datetime", nullable=False),
+                ColumnDefinition("business_tags", "string[]", nullable=False),
+                ColumnDefinition("permission_tags", "string[]", nullable=False),
+            ),
+            indexes=(("published_at",), ("business_tags",), ("permission_tags",)),
+        ),
+        TableDefinition(
+            name="rag.chunks",
+            domain=DataDomain.KNOWLEDGE_RETRIEVAL,
+            columns=(
+                ColumnDefinition("chunk_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("document_id", "string", nullable=False, foreign_key="rag.documents.document_id"),
+                ColumnDefinition("position", "integer", nullable=False),
+                ColumnDefinition("chunk_text", "text", nullable=False),
+                ColumnDefinition("token_count", "integer", nullable=False),
+            ),
+            indexes=(("document_id", "position"),),
+        ),
+        TableDefinition(
+            name="rag.embedding_metadata",
+            domain=DataDomain.KNOWLEDGE_RETRIEVAL,
+            columns=(
+                ColumnDefinition("embedding_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("chunk_id", "string", nullable=False, foreign_key="rag.chunks.chunk_id"),
+                ColumnDefinition("model_name", "string", nullable=False),
+                ColumnDefinition("model_version", "string", nullable=False),
+                ColumnDefinition("dimensions", "integer", nullable=False),
+            ),
+        ),
+        TableDefinition(
+            name="rag.index_jobs",
+            domain=DataDomain.KNOWLEDGE_RETRIEVAL,
+            columns=(
+                ColumnDefinition("job_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("document_id", "string", nullable=False),
+                ColumnDefinition("status", "string", nullable=False),
+                ColumnDefinition("error_message", "text"),
+            ),
+            indexes=(("document_id",), ("status",)),
+        ),
+        TableDefinition(
+            name="rag.evidence_events",
+            domain=DataDomain.KNOWLEDGE_RETRIEVAL,
+            columns=(
+                ColumnDefinition("event_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("trace_id", "string", nullable=False),
+                ColumnDefinition("evidence_id", "string", nullable=False),
+                ColumnDefinition("document_id", "string", nullable=False),
+                ColumnDefinition("chunk_id", "string", nullable=False),
+                ColumnDefinition("returned_at", "datetime", nullable=False),
+            ),
+            indexes=(("trace_id",), ("returned_at",)),
+        ),
     )
 
 

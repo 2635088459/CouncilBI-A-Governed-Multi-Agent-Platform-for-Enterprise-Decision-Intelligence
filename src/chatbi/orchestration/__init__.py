@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING
 
 from chatbi.orchestration.answer_verification import AnswerAssemblyVerifier
+from chatbi.orchestration.analytics_runner import AnalyticsServiceRunner
 from chatbi.orchestration.confidence import (
     CONFIDENCE_WEIGHTS,
     ConfidenceAggregationResult,
@@ -67,6 +68,7 @@ __all__ = [
     "AgentStepOutputStatus",
     "AgentStepTracer",
     "AgentTraceRepository",
+    "AnalyticsServiceRunner",
     "AnswerAssemblyVerifier",
     "AsyncTaskKind",
     "AsyncTaskRecord",

@@ -3,6 +3,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from chatbi.analytics import AnalyticsService
+from chatbi.analytics_repository import InMemoryAnalyticsRepository
 from chatbi.api.http import create_app
 from chatbi.api.http import database_readiness_checker_from_env
 from chatbi.api.http import public_trace_id_from_legacy
@@ -102,6 +104,24 @@ def valid_document_index_body() -> dict[str, object]:
         "business_tags": ["revenue", "release"],
         "permission_tags": ["business_user"],
         "text": "Revenue dashboard drill-down filters were improved.",
+    }
+
+
+def valid_analytics_body(trace_id: str = "tr_analytics_http") -> dict[str, object]:
+    return {
+        "trace_id": trace_id,
+        "metric_id": "revenue",
+        "semantic_version_id": "sem_v2",
+        "time_column": "date",
+        "value_column": "revenue",
+        "grain": "day",
+        "rows": [
+            {"date": "2026-06-01", "revenue": 100.0},
+            {"date": "2026-06-02", "revenue": 105.0},
+            {"date": "2026-06-03", "revenue": 110.0},
+            {"date": "2026-06-04", "revenue": 115.0},
+        ],
+        "analysis_options": {"horizon": 2, "anomaly_z_threshold": 3.0},
     }
 
 
@@ -1101,6 +1121,94 @@ def test_v2_chat_query_rejects_missing_bearer_token() -> None:
     assert body["data"] is None
     assert body["error"]["code"] == "AUTH_UNAUTHORIZED"
     assert body["warnings"][0]["code"] == "AUTH_UNAUTHORIZED"
+
+
+def test_v2_analytics_analyze_persists_result_and_result_endpoint_reads_it() -> None:
+    repository = InMemoryAnalyticsRepository()
+    service = AnalyticsService(repository)
+    client: Any = TestClient(create_app(analytics_service=service))
+
+    analyze_response = client.post(
+        "/api/v2/analytics/analyze",
+        headers={**auth_headers(), "X-Request-Id": "req_analytics_sync"},
+        json=valid_analytics_body("tr_analytics_sync"),
+    )
+    result_response = client.get(
+        "/api/v2/analytics/results/tr_analytics_sync",
+        headers={**auth_headers(), "X-Request-Id": "req_analytics_lookup"},
+    )
+
+    analyze_body: dict[str, Any] = analyze_response.json()
+    result_body: dict[str, Any] = result_response.json()
+
+    assert analyze_response.status_code == 200
+    assert analyze_body["request_id"] == "req_analytics_sync"
+    assert analyze_body["data"]["result"]["method"] == "rolling_zscore_linear_forecast"
+    assert len(analyze_body["data"]["result"]["forecast_points"]) == 2
+    assert result_response.status_code == 200
+    assert result_body["request_id"] == "req_analytics_lookup"
+    assert result_body["data"]["trace_id"] == "tr_analytics_sync"
+    assert result_body["data"]["parameters"]["horizon"] == 2
+    assert repository.result_by_trace_id("tr_analytics_sync") is not None
+
+
+def test_v2_analytics_analyze_returns_invalid_time_series_error() -> None:
+    client: Any = TestClient(create_app())
+    body = valid_analytics_body("tr_analytics_bad_time")
+    body["rows"] = [
+        {"date": "not-a-date", "revenue": 100.0},
+        {"date": "2026-06-02", "revenue": 105.0},
+        {"date": "2026-06-03", "revenue": 110.0},
+    ]
+
+    response = client.post(
+        "/api/v2/analytics/analyze",
+        headers={**auth_headers(), "X-Request-Id": "req_analytics_bad_time"},
+        json=body,
+    )
+
+    response_body: dict[str, Any] = response.json()
+
+    assert response.status_code == 400
+    assert response_body["trace_id"] == "tr_analytics_bad_time"
+    assert response_body["error"]["code"] == "ANALYTICS_INVALID_TIME_SERIES"
+
+
+def test_v2_analytics_task_endpoint_enqueues_analytics_task() -> None:
+    queue = InMemoryWorkerHandoffQueue()
+    client: Any = TestClient(create_app(worker_handoff_queue=queue))
+
+    response = client.post(
+        "/api/v2/analytics/tasks",
+        headers={**auth_headers(), "X-Request-Id": "req_analytics_task"},
+        json=valid_analytics_body("tr_analytics_task"),
+    )
+
+    body: dict[str, Any] = response.json()
+    task = queue.get(body["data"]["task_id"])
+
+    assert response.status_code == 202
+    assert body["request_id"] == "req_analytics_task"
+    assert body["data"]["kind"] == "analytics"
+    assert body["data"]["status"] == "queued"
+    assert body["data"]["payload"]["request"]["metric_id"] == "revenue"
+    assert task is not None
+    assert task.kind is AsyncTaskKind.ANALYTICS
+
+
+def test_v2_analytics_result_endpoint_returns_not_found() -> None:
+    client: Any = TestClient(create_app())
+
+    response = client.get(
+        "/api/v2/analytics/results/tr_missing_analytics",
+        headers={**auth_headers(), "X-Request-Id": "req_analytics_missing"},
+    )
+
+    body: dict[str, Any] = response.json()
+
+    assert response.status_code == 404
+    assert body["request_id"] == "req_analytics_missing"
+    assert body["error"]["code"] == "ANALYTICS_RESULT_NOT_FOUND"
 
 
 def test_v2_internal_api_error_returns_sanitized_envelope() -> None:

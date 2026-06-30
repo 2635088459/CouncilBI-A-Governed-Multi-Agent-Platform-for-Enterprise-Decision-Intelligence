@@ -2,11 +2,13 @@ from chatbi.core.contracts import Locale, UserRole
 from chatbi.frontend.api_client import FrontendApiClient, FrontendUserContext
 from chatbi.frontend.app_screen_model import build_app_screen_model
 from chatbi.frontend.app_shell import AppShellState, FrontendAppShell, FrontendRoute
+from chatbi.frontend.analytics_state import AnalyticsPageState
 from chatbi.frontend.catalog_state import CatalogPageState
 from chatbi.frontend.chat_state import ChatPageState
 from chatbi.frontend.component_props import (
     CatalogPageProps,
     ChatPageProps,
+    AnalyticsPageProps,
     EvaluationPageProps,
     HistoryPageProps,
     TaskStatusPageProps,
@@ -22,6 +24,7 @@ def test_build_app_screen_model_selects_active_page_props_for_each_route() -> No
         FrontendRoute.CHAT: ChatPageProps,
         FrontendRoute.HISTORY: HistoryPageProps,
         FrontendRoute.CATALOG: CatalogPageProps,
+        FrontendRoute.ANALYTICS: AnalyticsPageProps,
         FrontendRoute.TASK_STATUS: TaskStatusPageProps,
         FrontendRoute.EVALUATION: EvaluationPageProps,
     }
@@ -58,6 +61,7 @@ def _state(route: FrontendRoute) -> AppShellState:
         chat=ChatPageState(context=context),
         history=HistoryPageState(context=context),
         catalog=CatalogPageState(context=context),
+        analytics=AnalyticsPageState(context=context),
         task_status=TaskStatusPageState(context=context),
         evaluation=EvaluationPageState(context=context),
     )

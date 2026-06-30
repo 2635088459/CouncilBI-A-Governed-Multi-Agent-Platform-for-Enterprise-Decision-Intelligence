@@ -2,6 +2,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, cast
 
+from chatbi.analytics import AnalyticsService
+from chatbi.analytics_repository import InMemoryAnalyticsRepository
 from chatbi.core.contracts import (
     AgentName,
     AgentStepStatus,
@@ -273,6 +275,26 @@ def test_orchestrator_uses_execution_plan_for_forecast_question() -> None:
     forecast_result = cast(Mapping[str, Any], answer.analytics_result["forecast_result"])
     assert forecast_result["model_used"] == "moving_average"
     assert len(forecast_result["forecast_series"]) == 3
+    assert "v2_result" in answer.analytics_result
+
+
+def test_orchestrator_persists_v2_analytics_result_by_trace_id() -> None:
+    repository = InMemoryAnalyticsRepository()
+    orchestrator = SimpleOrchestrator(
+        analytics_service=AnalyticsService(repository),
+    )
+
+    answer = orchestrator.answer(
+        make_request("Predict revenue for next month."),
+        trace_id="trc_v2_analytics",
+    )
+
+    saved = repository.result_by_trace_id("trc_v2_analytics")
+    assert answer.analytics_result is not None
+    assert saved is not None
+    assert saved.metric_id == "revenue"
+    assert saved.result.forecast_points
+    assert saved.parameters["grain"] == "month"
 
 
 def test_sql_only_request_traces_orchestrator_sql_and_verifier_steps() -> None:

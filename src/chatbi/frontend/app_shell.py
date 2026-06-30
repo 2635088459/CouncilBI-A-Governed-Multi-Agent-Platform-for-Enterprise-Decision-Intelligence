@@ -11,17 +11,24 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
-from chatbi.frontend.api_client import FrontendUserContext
+from chatbi.frontend.analytics_state import (
+    AnalyticsApiPort,
+    AnalyticsPageState,
+    AnalyticsPageStore,
+)
+from chatbi.frontend.api_client import FrontendAnalyticsRequest, FrontendUserContext
 from chatbi.frontend.catalog_state import CatalogApiPort, CatalogPageState, CatalogPageStore
 from chatbi.frontend.chat_state import ChatApiPort, ChatPageState, ChatSessionStore
 from chatbi.frontend.component_props import (
     CatalogPageProps,
     ChatPageProps,
+    AnalyticsPageProps,
     EvaluationPageProps,
     HistoryPageProps,
     TaskStatusPageProps,
     build_catalog_page_props,
     build_chat_page_props,
+    build_analytics_page_props,
     build_evaluation_page_props,
     build_history_page_props,
     build_task_status_page_props,
@@ -47,6 +54,7 @@ class FrontendRoute(StrEnum):
     CHAT = "chat"
     HISTORY = "history"
     CATALOG = "catalog"
+    ANALYTICS = "analytics"
     TASK_STATUS = "task_status"
     EVALUATION = "evaluation"
 
@@ -55,6 +63,7 @@ class FrontendAppApiPort(
     ChatApiPort,
     HistoryApiPort,
     CatalogApiPort,
+    AnalyticsApiPort,
     TaskStatusApiPort,
     EvaluationApiPort,
     Protocol,
@@ -68,6 +77,7 @@ class AppShellState:
     chat: ChatPageState
     history: HistoryPageState
     catalog: CatalogPageState
+    analytics: AnalyticsPageState
     task_status: TaskStatusPageState
     evaluation: EvaluationPageState
 
@@ -85,6 +95,7 @@ class FrontendAppShell:
         self._chat_store = ChatSessionStore(context=context, api_client=api_client)
         self._history_store = HistoryPageStore(context=context, api_client=api_client)
         self._catalog_store = CatalogPageStore(context=context, api_client=api_client)
+        self._analytics_store = AnalyticsPageStore(context=context, api_client=api_client)
         self._task_status_store = TaskStatusPageStore(context=context, api_client=api_client)
         self._evaluation_store = EvaluationPageStore(context=context, api_client=api_client)
 
@@ -95,6 +106,7 @@ class FrontendAppShell:
             chat=self._chat_store.state,
             history=self._history_store.state,
             catalog=self._catalog_store.state,
+            analytics=self._analytics_store.state,
             task_status=self._task_status_store.state,
             evaluation=self._evaluation_store.state,
         )
@@ -120,6 +132,12 @@ class FrontendAppShell:
     def catalog_props(self) -> CatalogPageProps:
         return build_catalog_page_props(
             self._catalog_store.state,
+            self._context.locale,
+        )
+
+    def analytics_props(self) -> AnalyticsPageProps:
+        return build_analytics_page_props(
+            self._analytics_store.state,
             self._context.locale,
         )
 
@@ -196,6 +214,32 @@ class FrontendAppShell:
     def select_catalog_metric(self, metric_name: str) -> AppShellState:
         self._catalog_store.select_metric(metric_name)
         self._route = FrontendRoute.CATALOG
+        return self.state
+
+    def set_analytics_request(self, request: FrontendAnalyticsRequest) -> AppShellState:
+        self._analytics_store.set_request(request)
+        self._route = FrontendRoute.ANALYTICS
+        return self.state
+
+    def run_analytics(self, request: FrontendAnalyticsRequest | None = None) -> AppShellState:
+        if request is None:
+            self._analytics_store.run_current_request()
+        else:
+            self._analytics_store.run_request(request)
+        self._route = FrontendRoute.ANALYTICS
+        return self.state
+
+    def enqueue_analytics(self, request: FrontendAnalyticsRequest | None = None) -> AppShellState:
+        if request is None:
+            self._analytics_store.enqueue_current_request()
+        else:
+            self._analytics_store.enqueue_request(request)
+        self._route = FrontendRoute.ANALYTICS
+        return self.state
+
+    def load_analytics_result(self, trace_id: str) -> AppShellState:
+        self._analytics_store.load_result(trace_id)
+        self._route = FrontendRoute.ANALYTICS
         return self.state
 
     def load_task_status(self, task_id: str) -> AppShellState:

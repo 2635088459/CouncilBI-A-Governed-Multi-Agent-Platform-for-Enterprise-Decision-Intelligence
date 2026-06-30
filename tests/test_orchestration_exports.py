@@ -2,6 +2,7 @@ from chatbi.orchestration import (
     AgentStepInput,
     AgentStepName,
     AgentStepOutputStatus,
+    AnalyticsServiceRunner,
     OrchestrationRequest,
     UserContext,
     timed_out_agent_step_output,
@@ -32,3 +33,4 @@ def test_orchestration_package_exports_v2_contract_types() -> None:
 
     assert step_input.idempotency_key == "tr_12345678:sql:1"
     assert timeout_output.status is AgentStepOutputStatus.TIMED_OUT
+    assert AnalyticsServiceRunner.__name__ == "AnalyticsServiceRunner"

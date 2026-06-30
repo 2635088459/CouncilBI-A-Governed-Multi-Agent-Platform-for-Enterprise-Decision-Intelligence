@@ -13,6 +13,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from chatbi.analytics import (
+    AnalyticsGrain,
+    AnalyticsOptions,
+    AnalyticsRequest,
+    AnalyticsService,
+    AnalyticsValidationError,
+    result_to_dict,
+)
+from chatbi.analytics_repository import InMemoryAnalyticsRepository
 from chatbi.api.models import (
     ApiEnvelope,
     ApiErrorCode,
@@ -104,6 +113,55 @@ class EvalRunRequestBody(BaseModel):
             locale=self.locale,
             role=self.role,
         )
+
+
+class AnalyticsOptionsBody(BaseModel):
+    horizon: int = 3
+    anomaly_z_threshold: float = 3.0
+
+    def to_domain(self) -> AnalyticsOptions:
+        return AnalyticsOptions(
+            horizon=self.horizon,
+            anomaly_z_threshold=self.anomaly_z_threshold,
+        )
+
+
+class AnalyticsRequestBody(BaseModel):
+    trace_id: str
+    metric_id: str
+    semantic_version_id: str
+    time_column: str
+    value_column: str
+    grain: AnalyticsGrain
+    rows: tuple[dict[str, Any], ...]
+    analysis_options: AnalyticsOptionsBody = AnalyticsOptionsBody()
+
+    def to_domain(self) -> AnalyticsRequest:
+        return AnalyticsRequest(
+            trace_id=self.trace_id,
+            metric_id=self.metric_id,
+            semantic_version_id=self.semantic_version_id,
+            time_column=self.time_column,
+            value_column=self.value_column,
+            grain=self.grain,
+            rows=self.rows,
+            analysis_options=self.analysis_options.to_domain(),
+        )
+
+    def to_task_payload(self) -> Mapping[str, object]:
+        return {
+            "trace_id": self.trace_id,
+            "metric_id": self.metric_id,
+            "semantic_version_id": self.semantic_version_id,
+            "time_column": self.time_column,
+            "value_column": self.value_column,
+            "grain": self.grain.value,
+            "rows": self.rows,
+            "analysis_options": {
+                "horizon": self.analysis_options.horizon,
+                "anomaly_z_threshold": self.analysis_options.anomaly_z_threshold,
+            },
+        }
 
 
 class DocumentIndexRequestBody(BaseModel):
@@ -929,6 +987,7 @@ def create_app(
     observability_logger: ObservabilityLogger | None = None,
     guardrail_audit_log_v2: GuardrailAuditLogV2 | None = None,
     worker_handoff_queue: WorkerHandoffQueue | None = None,
+    analytics_service: AnalyticsService | None = None,
 ) -> FastAPI:
     active_runtime_config = runtime_config or load_runtime_config()
     chatbi_application = application or _build_default_chatbi_application(
@@ -962,6 +1021,9 @@ def create_app(
         )
     active_observability_logger = observability_logger or ObservabilityLogger()
     active_worker_handoff_queue = worker_handoff_queue or InMemoryWorkerHandoffQueue()
+    active_analytics_service = analytics_service or AnalyticsService(
+        InMemoryAnalyticsRepository()
+    )
     document_index_idempotency_cache: dict[
         tuple[str, ...],
         DocumentIndexIdempotencyEntry,
@@ -1464,6 +1526,146 @@ def create_app(
                 "trace_id": lookup_trace_id,
                 "request_id": active_request_id,
                 "data": async_task_record_to_dict(record),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/analytics/analyze")
+    def analytics_analyze_v2(  # pyright: ignore[reportUnusedFunction]
+        body: AnalyticsRequestBody,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        active_request_id = v2_request_id_from_header(request_id, "req_analytics_analyze")
+        if authorization is None or not authorization.startswith("Bearer "):
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=body.trace_id,
+                code="AUTH_UNAUTHORIZED",
+                message="Missing or invalid bearer token.",
+                status_code=401,
+            )
+
+        try:
+            request = body.to_domain()
+            result = active_analytics_service.analyze(request)
+        except AnalyticsValidationError as exc:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=body.trace_id,
+                code=exc.code.value,
+                message=str(exc),
+                status_code=400,
+            )
+        except ValueError as exc:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=body.trace_id,
+                code="VALIDATION_ERROR",
+                message=str(exc),
+                status_code=400,
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": request.trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "trace_id": request.trace_id,
+                    "metric_id": request.metric_id,
+                    "semantic_version_id": request.semantic_version_id,
+                    "result": result_to_dict(result),
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/analytics/tasks")
+    def analytics_task_v2(  # pyright: ignore[reportUnusedFunction]
+        body: AnalyticsRequestBody,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        active_request_id = v2_request_id_from_header(request_id, "req_analytics_task")
+        if authorization is None or not authorization.startswith("Bearer "):
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=body.trace_id,
+                code="AUTH_UNAUTHORIZED",
+                message="Missing or invalid bearer token.",
+                status_code=401,
+            )
+
+        try:
+            request = body.to_domain()
+        except ValueError as exc:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=body.trace_id,
+                code="VALIDATION_ERROR",
+                message=str(exc),
+                status_code=400,
+            )
+
+        task = active_worker_handoff_queue.enqueue(
+            AsyncTaskRequest(
+                trace_id=request.trace_id,
+                kind=AsyncTaskKind.ANALYTICS,
+                payload={"request": body.to_task_payload()},
+            )
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "trace_id": request.trace_id,
+                "request_id": active_request_id,
+                "data": async_task_record_to_dict(task),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.get("/api/v2/analytics/results/{trace_id}")
+    def analytics_result_v2(  # pyright: ignore[reportUnusedFunction]
+        trace_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        active_request_id = v2_request_id_from_header(request_id, "req_analytics_result")
+        if authorization is None or not authorization.startswith("Bearer "):
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_UNAUTHORIZED",
+                message="Missing or invalid bearer token.",
+                status_code=401,
+            )
+
+        record = active_analytics_service.result_by_trace_id(trace_id)
+        if record is None:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="ANALYTICS_RESULT_NOT_FOUND",
+                message="Analytics result was not found for trace id.",
+                status_code=404,
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "trace_id": record.trace_id,
+                    "metric_id": record.metric_id,
+                    "semantic_version_id": record.semantic_version_id,
+                    "parameters": dict(record.parameters),
+                    "result": result_to_dict(record.result),
+                },
                 "warnings": [],
                 "error": None,
             },

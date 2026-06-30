@@ -74,6 +74,15 @@ class TranslationKey(StrEnum):
     EVALUATION_SCORE = "evaluation.score"
     EVALUATION_CASES = "evaluation.cases"
     EVALUATION_FAILED_CASES = "evaluation.failed_cases"
+    ANALYTICS_TITLE = "analytics.title"
+    ANALYTICS_EMPTY = "analytics.empty"
+    ANALYTICS_RUN = "analytics.run"
+    ANALYTICS_ENQUEUE = "analytics.enqueue"
+    ANALYTICS_LOAD_RESULT = "analytics.load_result"
+    ANALYTICS_METHOD = "analytics.method"
+    ANALYTICS_MODEL_VERSION = "analytics.model_version"
+    ANALYTICS_FORECAST_POINTS = "analytics.forecast_points"
+    ANALYTICS_WARNINGS = "analytics.warnings"
     ERROR_SAFE_MESSAGE = "error.safe_message"
     ACCESSIBILITY_CHART_SUMMARY = "accessibility.chart_summary"
 
@@ -144,6 +153,15 @@ TRANSLATIONS: Mapping[Locale, Mapping[TranslationKey, str]] = {
         TranslationKey.EVALUATION_SCORE: "Overall score: {score}",
         TranslationKey.EVALUATION_CASES: "{passed}/{total} cases passed",
         TranslationKey.EVALUATION_FAILED_CASES: "{count} failed cases",
+        TranslationKey.ANALYTICS_TITLE: "Analytics",
+        TranslationKey.ANALYTICS_EMPTY: "Run metric analytics to inspect anomalies and forecasts.",
+        TranslationKey.ANALYTICS_RUN: "Run analytics",
+        TranslationKey.ANALYTICS_ENQUEUE: "Queue analytics",
+        TranslationKey.ANALYTICS_LOAD_RESULT: "Load result",
+        TranslationKey.ANALYTICS_METHOD: "Method: {method}",
+        TranslationKey.ANALYTICS_MODEL_VERSION: "Model version: {model_version}",
+        TranslationKey.ANALYTICS_FORECAST_POINTS: "Forecast points: {count}",
+        TranslationKey.ANALYTICS_WARNINGS: "{count} quality warnings",
         TranslationKey.ERROR_SAFE_MESSAGE: "This request cannot be answered safely. Try narrowing the question.",
         TranslationKey.ACCESSIBILITY_CHART_SUMMARY: "{chart_type} chart with x field {x_field}.",
     },
@@ -206,6 +224,15 @@ TRANSLATIONS: Mapping[Locale, Mapping[TranslationKey, str]] = {
         TranslationKey.EVALUATION_SCORE: "总分：{score}",
         TranslationKey.EVALUATION_CASES: "{passed}/{total} 个用例通过",
         TranslationKey.EVALUATION_FAILED_CASES: "{count} 个失败用例",
+        TranslationKey.ANALYTICS_TITLE: "分析",
+        TranslationKey.ANALYTICS_EMPTY: "运行指标分析来查看异常和预测。",
+        TranslationKey.ANALYTICS_RUN: "运行分析",
+        TranslationKey.ANALYTICS_ENQUEUE: "加入分析队列",
+        TranslationKey.ANALYTICS_LOAD_RESULT: "加载结果",
+        TranslationKey.ANALYTICS_METHOD: "方法：{method}",
+        TranslationKey.ANALYTICS_MODEL_VERSION: "模型版本：{model_version}",
+        TranslationKey.ANALYTICS_FORECAST_POINTS: "预测点数：{count}",
+        TranslationKey.ANALYTICS_WARNINGS: "{count} 个质量警告",
         TranslationKey.ERROR_SAFE_MESSAGE: "这个请求无法安全回答，请尝试缩小问题范围。",
         TranslationKey.ACCESSIBILITY_CHART_SUMMARY: "{chart_type} 图，横轴字段是 {x_field}。",
     },

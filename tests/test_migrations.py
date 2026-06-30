@@ -4,6 +4,8 @@ from typing import Sequence
 import pytest
 
 from chatbi.migrations import (
+    ANALYTICS_V2_RESULTS_TABLE,
+    ANALYTICS_V2_TABLES_SQL,
     BASE_MIGRATION_SQL_STATEMENTS,
     BASE_MIGRATION_VERSION,
     BUSINESS_REVENUE_BY_MONTH_TABLE,
@@ -29,6 +31,12 @@ from chatbi.migrations import (
     KNOWLEDGE_RAG_TABLES_SQL,
     MIGRATION_METADATA_TABLE,
     MIGRATION_METADATA_TABLE_SQL,
+    RAG_V2_CHUNKS_TABLE,
+    RAG_V2_DOCUMENTS_TABLE,
+    RAG_V2_EMBEDDING_METADATA_TABLE,
+    RAG_V2_EVIDENCE_EVENTS_TABLE,
+    RAG_V2_INDEX_JOBS_TABLE,
+    RAG_V2_TABLES_SQL,
     READONLY_DATABASE_ROLE_SQL,
     RUNTIME_AGENT_TRACES_TABLE,
     RUNTIME_AGENT_TRACES_TABLE_SQL,
@@ -83,6 +91,8 @@ def test_v2_schemas_sql_creates_all_required_schema_layers() -> None:
         "governance",
         "evaluation",
         "knowledge",
+        "rag",
+        "analytics",
     )
     for schema_name in V2_SCHEMA_NAMES:
         assert f"CREATE SCHEMA IF NOT EXISTS {schema_name};" in V2_SCHEMAS_SQL
@@ -98,6 +108,8 @@ def test_base_migration_sql_statements_are_ordered_for_dependencies() -> None:
         SEMANTIC_REVENUE_SEED_SQL,
         KNOWLEDGE_RAG_TABLES_SQL,
         KNOWLEDGE_RAG_SEED_SQL,
+        RAG_V2_TABLES_SQL,
+        ANALYTICS_V2_TABLES_SQL,
         GOVERNANCE_POLICY_TABLES_SQL,
         GOVERNANCE_RESTRICTED_FIELD_POLICY_SEED_SQL,
         EVALUATION_TABLES_SQL,
@@ -204,6 +216,46 @@ def test_knowledge_rag_seed_sql_reproduces_required_rag_fixture() -> None:
     assert "'local-deterministic-v1'" in normalized_sql
     assert "'pgvector://knowledge.doc_chunks/rag_revenue_policy_2026_chunk_1'" in normalized_sql
     assert "ON CONFLICT (embedding_id) DO UPDATE SET" in normalized_sql
+
+
+def test_rag_v2_tables_sql_creates_spec_v2_rag_tables() -> None:
+    normalized_sql = " ".join(RAG_V2_TABLES_SQL.split())
+
+    assert RAG_V2_DOCUMENTS_TABLE == "rag.documents"
+    assert RAG_V2_CHUNKS_TABLE == "rag.chunks"
+    assert RAG_V2_EMBEDDING_METADATA_TABLE == "rag.embedding_metadata"
+    assert RAG_V2_INDEX_JOBS_TABLE == "rag.index_jobs"
+    assert RAG_V2_EVIDENCE_EVENTS_TABLE == "rag.evidence_events"
+    assert "CREATE SCHEMA IF NOT EXISTS rag" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS rag.documents" in normalized_sql
+    assert "document_id TEXT PRIMARY KEY" in normalized_sql
+    assert "permission_tags TEXT[] NOT NULL DEFAULT '{}'" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS rag.chunks" in normalized_sql
+    assert "document_id TEXT NOT NULL REFERENCES rag.documents(document_id)" in normalized_sql
+    assert "token_count INTEGER NOT NULL CHECK" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS rag.embedding_metadata" in normalized_sql
+    assert "model_name TEXT NOT NULL" in normalized_sql
+    assert "model_version TEXT NOT NULL" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS rag.index_jobs" in normalized_sql
+    assert "status TEXT NOT NULL CHECK" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS rag.evidence_events" in normalized_sql
+    assert "trace_id TEXT NOT NULL" in normalized_sql
+    assert "idx_rag_evidence_events_trace_id" in normalized_sql
+
+
+def test_analytics_v2_tables_sql_creates_spec_v2_result_table() -> None:
+    normalized_sql = " ".join(ANALYTICS_V2_TABLES_SQL.split())
+
+    assert ANALYTICS_V2_RESULTS_TABLE == "analytics.results"
+    assert "CREATE SCHEMA IF NOT EXISTS analytics" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS analytics.results" in normalized_sql
+    assert "trace_id TEXT PRIMARY KEY" in normalized_sql
+    assert "parameters JSONB NOT NULL" in normalized_sql
+    assert "anomaly_points JSONB NOT NULL" in normalized_sql
+    assert "forecast_points JSONB NOT NULL" in normalized_sql
+    assert "quality_warnings TEXT[] NOT NULL DEFAULT '{}'" in normalized_sql
+    assert "model_version TEXT NOT NULL" in normalized_sql
+    assert "idx_analytics_results_metric_id" in normalized_sql
 
 
 def test_governance_policy_tables_sql_creates_restricted_field_policy_table() -> None:

@@ -2,6 +2,7 @@ from chatbi.core.contracts import Locale, UserRole
 from chatbi.frontend.api_client import FrontendUserContext
 from chatbi.frontend.app_shell import AppShellState, FrontendRoute
 from chatbi.frontend.app_shell_props import build_app_shell_props
+from chatbi.frontend.analytics_state import AnalyticsPageState
 from chatbi.frontend.catalog_state import CatalogPageState
 from chatbi.frontend.chat_state import ChatPageState
 from chatbi.frontend.component_props import ComponentId
@@ -22,6 +23,7 @@ def test_build_app_shell_props_marks_current_route_active() -> None:
         FrontendRoute.CHAT,
         FrontendRoute.HISTORY,
         FrontendRoute.CATALOG,
+        FrontendRoute.ANALYTICS,
         FrontendRoute.TASK_STATUS,
         FrontendRoute.EVALUATION,
     ]
@@ -29,6 +31,7 @@ def test_build_app_shell_props_marks_current_route_active() -> None:
         "InsightOps AI",
         "Query History",
         "Metric Catalog",
+        "Analytics",
         "Task Status",
         "Evaluation",
     ]
@@ -38,11 +41,13 @@ def test_build_app_shell_props_marks_current_route_active() -> None:
         True,
         False,
         False,
+        False,
     ]
     assert props.tab_order == (
         ComponentId.NAV_CHAT,
         ComponentId.NAV_HISTORY,
         ComponentId.NAV_CATALOG,
+        ComponentId.NAV_ANALYTICS,
         ComponentId.NAV_TASK_STATUS,
         ComponentId.NAV_EVALUATION,
     )
@@ -58,6 +63,7 @@ def test_build_app_shell_props_localizes_navigation_labels() -> None:
         "InsightOps AI",
         "查询历史",
         "指标目录",
+        "分析",
         "任务状态",
         "评估",
     ]
@@ -74,6 +80,7 @@ def _state(
         chat=ChatPageState(context=context),
         history=HistoryPageState(context=context),
         catalog=CatalogPageState(context=context),
+        analytics=AnalyticsPageState(context=context),
         task_status=TaskStatusPageState(context=context),
         evaluation=EvaluationPageState(context=context),
     )

@@ -33,6 +33,11 @@ def test_data_model_includes_semantic_knowledge_runtime_and_cache_tables() -> No
         "documents",
         "doc_chunks",
         "doc_embeddings",
+        "rag.documents",
+        "rag.chunks",
+        "rag.embedding_metadata",
+        "rag.index_jobs",
+        "rag.evidence_events",
     }
     assert set(catalog.table_names_for_domain(DataDomain.RUNTIME_GOVERNANCE)) == {
         "sessions",
@@ -199,6 +204,37 @@ def test_knowledge_model_stores_document_chunk_and_embedding_metadata() -> None:
     assert doc_chunks.get_column("source_id") is not None
     assert doc_embeddings is not None
     assert doc_embeddings.get_column("embedding_vector") is not None
+
+
+def test_rag_v2_data_model_tracks_documents_chunks_jobs_and_evidence_events() -> None:
+    catalog = build_default_data_model_catalog()
+
+    documents = catalog.get_table("rag.documents")
+    chunks = catalog.get_table("rag.chunks")
+    embeddings = catalog.get_table("rag.embedding_metadata")
+    index_jobs = catalog.get_table("rag.index_jobs")
+    evidence_events = catalog.get_table("rag.evidence_events")
+
+    assert documents is not None
+    assert documents.primary_key_columns == ("document_id",)
+    assert documents.get_column("permission_tags") is not None
+    assert ("business_tags",) in documents.indexes
+    assert ("permission_tags",) in documents.indexes
+    assert chunks is not None
+    assert chunks.primary_key_columns == ("chunk_id",)
+    chunk_document_id = chunks.get_column("document_id")
+    assert chunk_document_id is not None
+    assert chunk_document_id.foreign_key == "rag.documents.document_id"
+    assert chunks.get_column("token_count") is not None
+    assert ("document_id", "position") in chunks.indexes
+    assert embeddings is not None
+    assert embeddings.get_column("model_name") is not None
+    assert embeddings.get_column("model_version") is not None
+    assert index_jobs is not None
+    assert index_jobs.get_column("status") is not None
+    assert evidence_events is not None
+    assert evidence_events.get_column("trace_id") is not None
+    assert ("trace_id",) in evidence_events.indexes
 
 
 def test_runtime_governance_tables_keep_trace_id_linkage() -> None:

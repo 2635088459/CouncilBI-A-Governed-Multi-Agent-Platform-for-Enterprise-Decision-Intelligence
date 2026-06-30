@@ -14,11 +14,13 @@ from chatbi.core.contracts import Locale
 from chatbi.frontend.app_shell import AppShellState, FrontendRoute
 from chatbi.frontend.app_shell_props import AppShellProps, build_app_shell_props
 from chatbi.frontend.component_props import (
+    AnalyticsPageProps,
     CatalogPageProps,
     ChatPageProps,
     EvaluationPageProps,
     HistoryPageProps,
     TaskStatusPageProps,
+    build_analytics_page_props,
     build_catalog_page_props,
     build_chat_page_props,
     build_evaluation_page_props,
@@ -31,6 +33,7 @@ ActivePageProps: TypeAlias = (
     ChatPageProps
     | HistoryPageProps
     | CatalogPageProps
+    | AnalyticsPageProps
     | TaskStatusPageProps
     | EvaluationPageProps
 )
@@ -61,6 +64,8 @@ def _active_page_props(state: AppShellState, locale: Locale) -> ActivePageProps:
         return build_history_page_props(state.history, locale)
     if state.route is FrontendRoute.CATALOG:
         return build_catalog_page_props(state.catalog, locale)
+    if state.route is FrontendRoute.ANALYTICS:
+        return build_analytics_page_props(state.analytics, locale)
     if state.route is FrontendRoute.TASK_STATUS:
         return build_task_status_page_props(state.task_status, locale)
     return build_evaluation_page_props(state.evaluation, locale)

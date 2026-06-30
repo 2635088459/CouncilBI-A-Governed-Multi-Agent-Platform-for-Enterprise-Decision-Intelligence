@@ -12,6 +12,8 @@ from chatbi.governance.audit import (
     QUERY_AUDIT_EVENTS_TABLE_SQL,
     SQL_RULE_HITS_TABLE_SQL,
 )
+from chatbi.analytics_postgres_rows import ANALYTICS_V2_TABLES_SQL
+from chatbi.rag_postgres_rows import RAG_V2_TABLES_SQL
 
 
 V2_SCHEMA_NAMES = (
@@ -21,6 +23,8 @@ V2_SCHEMA_NAMES = (
     "governance",
     "evaluation",
     "knowledge",
+    "rag",
+    "analytics",
 )
 
 V2_SCHEMAS_SQL = "\n".join(
@@ -42,6 +46,12 @@ SEMANTIC_DIMENSIONS_TABLE = "semantic.dimensions"
 KNOWLEDGE_DOCUMENTS_TABLE = "knowledge.documents"
 KNOWLEDGE_DOC_CHUNKS_TABLE = "knowledge.doc_chunks"
 KNOWLEDGE_DOC_EMBEDDINGS_TABLE = "knowledge.doc_embeddings"
+RAG_V2_DOCUMENTS_TABLE = "rag.documents"
+RAG_V2_CHUNKS_TABLE = "rag.chunks"
+RAG_V2_EMBEDDING_METADATA_TABLE = "rag.embedding_metadata"
+RAG_V2_INDEX_JOBS_TABLE = "rag.index_jobs"
+RAG_V2_EVIDENCE_EVENTS_TABLE = "rag.evidence_events"
+ANALYTICS_V2_RESULTS_TABLE = "analytics.results"
 GOVERNANCE_ACCESS_POLICIES_TABLE = "governance.access_policies"
 EVALUATION_CASES_TABLE = "evaluation.eval_cases"
 EVALUATION_RUNS_TABLE = "evaluation.eval_runs"
@@ -751,6 +761,8 @@ BASE_MIGRATION_SQL_STATEMENTS = (
     SEMANTIC_REVENUE_SEED_SQL,
     KNOWLEDGE_RAG_TABLES_SQL,
     KNOWLEDGE_RAG_SEED_SQL,
+    RAG_V2_TABLES_SQL,
+    ANALYTICS_V2_TABLES_SQL,
     GOVERNANCE_POLICY_TABLES_SQL,
     GOVERNANCE_RESTRICTED_FIELD_POLICY_SEED_SQL,
     EVALUATION_TABLES_SQL,

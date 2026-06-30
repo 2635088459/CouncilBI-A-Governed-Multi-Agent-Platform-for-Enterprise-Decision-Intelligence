@@ -15,6 +15,7 @@ from chatbi.frontend.catalog_state import (
     CatalogPageState,
     MetricDefinitionViewModel,
 )
+from chatbi.frontend.analytics_state import AnalyticsPageState
 from chatbi.frontend.chat_state import ChatPageState, ChatTurnStatus, ChatTurnViewModel
 from chatbi.frontend.evaluation_state import EvaluationPageState, ReleaseGateStatus
 from chatbi.frontend.history_state import (
@@ -33,6 +34,7 @@ class ComponentId(StrEnum):
     NAV_CHAT = "nav.chat"
     NAV_HISTORY = "nav.history"
     NAV_CATALOG = "nav.catalog"
+    NAV_ANALYTICS = "nav.analytics"
     NAV_TASK_STATUS = "nav.task_status"
     NAV_EVALUATION = "nav.evaluation"
     CHAT_INPUT = "chat.input"
@@ -57,6 +59,11 @@ class ComponentId(StrEnum):
     EVALUATION_RUN = "evaluation.run"
     EVALUATION_REPORT = "evaluation.report"
     EVALUATION_FAILED_CASES = "evaluation.failed_cases"
+    ANALYTICS_RUN = "analytics.run"
+    ANALYTICS_ENQUEUE = "analytics.enqueue"
+    ANALYTICS_LOAD_RESULT = "analytics.load_result"
+    ANALYTICS_RESULT = "analytics.result"
+    ANALYTICS_TASK = "analytics.task"
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +246,44 @@ class EvaluationPageProps:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalyticsRunInputProps:
+    trace_id: str
+    metric_id: str
+    grain: str
+    row_count: int
+    run_label: str
+    enqueue_label: str
+    load_result_label: str
+    can_run: bool
+    can_enqueue: bool
+    can_load_result: bool
+    aria_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyticsResultSummaryProps:
+    trace_id: str
+    metric_id: str
+    method_label: str
+    model_version_label: str
+    forecast_points_label: str
+    warning_count_label: str
+    explanation: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyticsPageProps:
+    title: str
+    empty_state: str
+    input: AnalyticsRunInputProps
+    result: AnalyticsResultSummaryProps | None
+    task: TaskStatusCardProps | None
+    is_loading: bool
+    error_message: str | None
+    tab_order: tuple[ComponentId, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class TaskStatusInputProps:
     value: str
     placeholder: str
@@ -357,6 +402,36 @@ def build_evaluation_page_props(
         is_running=state.is_running,
         error_message=state.error_message,
         tab_order=_evaluation_tab_order_for(state),
+    )
+
+
+def build_analytics_page_props(
+    state: AnalyticsPageState,
+    locale: Locale,
+) -> AnalyticsPageProps:
+    request = state.request
+    has_request = request is not None
+    return AnalyticsPageProps(
+        title=translate(TranslationKey.ANALYTICS_TITLE, locale),
+        empty_state=translate(TranslationKey.ANALYTICS_EMPTY, locale),
+        input=AnalyticsRunInputProps(
+            trace_id="" if request is None else request.trace_id,
+            metric_id="" if request is None else request.metric_id,
+            grain="" if request is None else request.grain,
+            row_count=0 if request is None else len(request.rows),
+            run_label=translate(TranslationKey.ANALYTICS_RUN, locale),
+            enqueue_label=translate(TranslationKey.ANALYTICS_ENQUEUE, locale),
+            load_result_label=translate(TranslationKey.ANALYTICS_LOAD_RESULT, locale),
+            can_run=has_request and not state.is_loading,
+            can_enqueue=has_request and not state.is_loading,
+            can_load_result=has_request and bool(request.trace_id.strip()) and not state.is_loading,
+            aria_label=translate(TranslationKey.ANALYTICS_TITLE, locale),
+        ),
+        result=_analytics_result_summary_props(state, locale),
+        task=_task_status_card_props(state.latest_task, locale),
+        is_loading=state.is_loading,
+        error_message=state.error_message,
+        tab_order=_analytics_tab_order_for(state),
     )
 
 
@@ -724,6 +799,53 @@ def _task_status_tone(status: TaskStatusViewModel) -> str:
     if status.status is UiTaskStatus.COMPLETED:
         return "success"
     return "neutral"
+
+
+def _analytics_result_summary_props(
+    state: AnalyticsPageState,
+    locale: Locale,
+) -> AnalyticsResultSummaryProps | None:
+    result = state.latest_result
+    if result is None:
+        return None
+    return AnalyticsResultSummaryProps(
+        trace_id=result.trace_id,
+        metric_id=result.metric_id,
+        method_label=translate(
+            TranslationKey.ANALYTICS_METHOD,
+            locale,
+            variables={"method": result.method},
+        ),
+        model_version_label=translate(
+            TranslationKey.ANALYTICS_MODEL_VERSION,
+            locale,
+            variables={"model_version": result.model_version},
+        ),
+        forecast_points_label=translate(
+            TranslationKey.ANALYTICS_FORECAST_POINTS,
+            locale,
+            variables={"count": len(result.forecast_points)},
+        ),
+        warning_count_label=translate(
+            TranslationKey.ANALYTICS_WARNINGS,
+            locale,
+            variables={"count": len(result.quality_warnings)},
+        ),
+        explanation=result.explanation,
+    )
+
+
+def _analytics_tab_order_for(state: AnalyticsPageState) -> tuple[ComponentId, ...]:
+    order = [
+        ComponentId.ANALYTICS_RUN,
+        ComponentId.ANALYTICS_ENQUEUE,
+        ComponentId.ANALYTICS_LOAD_RESULT,
+    ]
+    if state.latest_result is not None:
+        order.append(ComponentId.ANALYTICS_RESULT)
+    if state.latest_task is not None:
+        order.append(ComponentId.ANALYTICS_TASK)
+    return tuple(order)
 
 
 def _task_status_tab_order_for(state: TaskStatusPageState) -> tuple[ComponentId, ...]:

@@ -1,6 +1,8 @@
 from chatbi.core.contracts import ChartType, Locale, UserRole
 from chatbi.frontend.api_client import (
     EvaluationRunViewModel,
+    FrontendAnalyticsRequest,
+    FrontendAnalyticsResultViewModel,
     FrontendUserContext,
     HistoryListViewModel,
     MetricCatalogViewModel,
@@ -24,6 +26,9 @@ class FakeFrontendAppApiClient:
         self.submitted_questions: list[str] = []
         self.replayed_trace_ids: list[str] = []
         self.loaded_task_ids: list[str] = []
+        self.analyzed_trace_ids: list[str] = []
+        self.enqueued_trace_ids: list[str] = []
+        self.loaded_analytics_trace_ids: list[str] = []
 
     def submit_question(
         self,
@@ -108,6 +113,38 @@ class FakeFrontendAppApiClient:
             failed_cases_detail=(),
             release_gate_passed=True,
         )
+
+    def analyze_metric(
+        self,
+        context: FrontendUserContext,
+        request: FrontendAnalyticsRequest,
+    ) -> FrontendAnalyticsResultViewModel:
+        self.analyzed_trace_ids.append(request.trace_id)
+        return _analytics_result(request.trace_id)
+
+    def enqueue_analytics(
+        self,
+        context: FrontendUserContext,
+        request: FrontendAnalyticsRequest,
+    ) -> TaskStatusViewModel:
+        self.enqueued_trace_ids.append(request.trace_id)
+        return TaskStatusViewModel(
+            task_id="task_analytics_001",
+            trace_id=request.trace_id,
+            kind="analytics",
+            status=UiTaskStatus.QUEUED,
+            label="Queued",
+            result={},
+            error_message=None,
+        )
+
+    def load_analytics_result(
+        self,
+        context: FrontendUserContext,
+        trace_id: str,
+    ) -> FrontendAnalyticsResultViewModel:
+        self.loaded_analytics_trace_ids.append(trace_id)
+        return _analytics_result(trace_id)
 
 
 def test_app_shell_submits_chat_question_and_builds_chat_props() -> None:
@@ -207,6 +244,42 @@ def test_app_shell_loads_task_status_page() -> None:
     assert api_client.loaded_task_ids == ["task_001", "task_001"]
 
 
+def test_app_shell_runs_analytics_page_workflows() -> None:
+    api_client = FakeFrontendAppApiClient()
+    shell = FrontendAppShell(context=_context(), api_client=api_client)
+    request = _analytics_request("tr_analytics_shell")
+
+    run_state = shell.run_analytics(request)
+    run_props = shell.analytics_props()
+    queued_state = shell.enqueue_analytics(request)
+    loaded_state = shell.load_analytics_result("tr_analytics_shell")
+
+    assert run_state.route is FrontendRoute.ANALYTICS
+    assert run_state.analytics.latest_result is not None
+    assert run_props.result is not None
+    assert run_props.result.forecast_points_label == "Forecast points: 1"
+    assert queued_state.analytics.latest_task is not None
+    assert queued_state.analytics.latest_task.kind == "analytics"
+    assert loaded_state.analytics.latest_result is not None
+    assert api_client.analyzed_trace_ids == ["tr_analytics_shell"]
+    assert api_client.enqueued_trace_ids == ["tr_analytics_shell"]
+    assert api_client.loaded_analytics_trace_ids == ["tr_analytics_shell"]
+
+
+def test_app_shell_sets_analytics_request_then_runs_current() -> None:
+    api_client = FakeFrontendAppApiClient()
+    shell = FrontendAppShell(context=_context(), api_client=api_client)
+
+    shell.set_analytics_request(_analytics_request("tr_analytics_current"))
+    state = shell.run_analytics()
+
+    assert state.route is FrontendRoute.ANALYTICS
+    assert state.analytics.request is not None
+    assert state.analytics.request.trace_id == "tr_analytics_current"
+    assert state.analytics.latest_result is not None
+    assert api_client.analyzed_trace_ids == ["tr_analytics_current"]
+
+
 def test_app_shell_noops_replay_when_no_history_selection_exists() -> None:
     shell = FrontendAppShell(
         context=_context(),
@@ -255,4 +328,41 @@ def _result(trace_id: str) -> QueryResultViewModel:
             explanation="Generated SQL used by the governed query pipeline.",
         ),
         confidence=0.9,
+    )
+
+
+def _analytics_request(trace_id: str) -> FrontendAnalyticsRequest:
+    return FrontendAnalyticsRequest(
+        trace_id=trace_id,
+        metric_id="revenue",
+        semantic_version_id="sem_v2",
+        time_column="date",
+        value_column="revenue",
+        grain="day",
+        rows=(
+            {"date": "2026-06-01", "revenue": 100.0},
+            {"date": "2026-06-02", "revenue": 105.0},
+            {"date": "2026-06-03", "revenue": 110.0},
+        ),
+    )
+
+
+def _analytics_result(trace_id: str) -> FrontendAnalyticsResultViewModel:
+    return FrontendAnalyticsResultViewModel(
+        trace_id=trace_id,
+        metric_id="revenue",
+        semantic_version_id="sem_v2",
+        method="rolling_zscore_linear_forecast",
+        model_version="analytics-v2-rule-based-001",
+        anomaly_points=(),
+        forecast_points=(
+            {
+                "timestamp": "2026-06-04",
+                "value": 115.0,
+                "lower": 105.0,
+                "upper": 125.0,
+            },
+        ),
+        quality_warnings=(),
+        explanation="Deterministic analytics result.",
     )

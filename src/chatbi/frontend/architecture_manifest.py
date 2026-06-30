@@ -113,6 +113,18 @@ def build_frontend_architecture_manifest() -> FrontendArchitectureManifest:
                 props_builder="build_catalog_page_props",
             ),
             FrontendPageContract(
+                route=FrontendRoute.ANALYTICS,
+                title="Analytics",
+                api_paths=(
+                    "/api/v2/analytics/analyze",
+                    "/api/v2/analytics/tasks",
+                    "/api/v2/analytics/results/{trace_id}",
+                ),
+                render_regions=(RenderRegion.ANALYTICS_RESULT,),
+                state_module="chatbi.frontend.analytics_state",
+                props_builder="build_analytics_page_props",
+            ),
+            FrontendPageContract(
                 route=FrontendRoute.TASK_STATUS,
                 title="Task Status",
                 api_paths=("/api/v1/chat/tasks/{task_id}",),

@@ -24,6 +24,7 @@ class AsyncTaskStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    TIMED_OUT = "timed_out"
 
 
 def new_task_id() -> str:
@@ -66,10 +67,15 @@ class AsyncTaskRecord:
     def __post_init__(self) -> None:
         if not self.task_id.startswith("task_"):
             raise ValueError("task_id must start with task_")
-        if self.status is AsyncTaskStatus.FAILED and not (self.error_message or "").strip():
-            raise ValueError("failed task must include error_message")
-        if self.status is not AsyncTaskStatus.FAILED and self.error_message is not None:
-            raise ValueError("only failed tasks may include error_message")
+        if self.status in (AsyncTaskStatus.FAILED, AsyncTaskStatus.TIMED_OUT) and not (
+            self.error_message or ""
+        ).strip():
+            raise ValueError("failed or timed_out task must include error_message")
+        if (
+            self.status not in (AsyncTaskStatus.FAILED, AsyncTaskStatus.TIMED_OUT)
+            and self.error_message is not None
+        ):
+            raise ValueError("only failed or timed_out tasks may include error_message")
 
 
 class WorkerHandoffQueue(Protocol):
@@ -95,6 +101,10 @@ class WorkerHandoffQueue(Protocol):
 
     def mark_failed(self, task_id: str, error_message: str) -> AsyncTaskRecord:
         """Persist failed completion for one task."""
+        ...
+
+    def mark_timed_out(self, task_id: str, error_message: str) -> AsyncTaskRecord:
+        """Persist timeout completion for one task."""
         ...
 
     def list_by_trace_id(self, trace_id: str) -> tuple[AsyncTaskRecord, ...]:
@@ -142,6 +152,15 @@ class InMemoryWorkerHandoffQueue:
         return self._replace_status(
             task_id,
             AsyncTaskStatus.FAILED,
+            error_message=error_message,
+        )
+
+    def mark_timed_out(self, task_id: str, error_message: str) -> AsyncTaskRecord:
+        if not error_message.strip():
+            raise ValueError("error_message is required")
+        return self._replace_status(
+            task_id,
+            AsyncTaskStatus.TIMED_OUT,
             error_message=error_message,
         )
 

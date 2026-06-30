@@ -5,11 +5,8 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Mapping, Protocol, TypeGuard, cast
 
-from chatbi.agents.analytics_agent import (
-    AnalyticsAgentRunner,
-    AnalyticsModel,
-    TimeSeriesPoint,
-)
+from chatbi.analytics import AnalyticsGrain, AnalyticsService
+from chatbi.analytics_repository import InMemoryAnalyticsRepository
 from chatbi.agents.rag_agent import RagAgentRunner
 from chatbi.agents.sql_agent import SqlAgentRunner
 from chatbi.agents.verifier_agent import VerifierAgentRunner
@@ -34,6 +31,7 @@ from chatbi.governance.simple_guardrail import SimpleSqlGuardrail
 from chatbi.history.in_memory import InMemoryQueryHistory
 from chatbi.knowledge import InMemoryKnowledgeStore
 from chatbi.orchestration.answer_verification import AnswerAssemblyVerifier
+from chatbi.orchestration.analytics_runner import AnalyticsServiceRunner
 from chatbi.orchestration.executor import (
     PlanExecutor,
     PlanExecutionResult,
@@ -75,6 +73,7 @@ class SimpleOrchestrator:
         answer_verifier: AnswerAssemblyVerifier | None = None,
         readonly_query_executor: ReadOnlyQueryRunner | None = None,
         readonly_database_url: str | None = None,
+        analytics_service: AnalyticsService | None = None,
     ) -> None:
         self._guardrail = guardrail or SimpleSqlGuardrail()
         self._history = history or InMemoryQueryHistory()
@@ -85,6 +84,9 @@ class SimpleOrchestrator:
         self._answer_verifier = answer_verifier or AnswerAssemblyVerifier()
         self._readonly_query_executor = readonly_query_executor
         self._readonly_database_url = readonly_database_url
+        self._analytics_service = analytics_service or AnalyticsService(
+            InMemoryAnalyticsRepository()
+        )
 
     @property
     def history(self) -> InMemoryQueryHistory:
@@ -281,7 +283,7 @@ class SimpleOrchestrator:
         AgentName,
         SqlAgentRunner
         | VisualizationAgentRunner
-        | AnalyticsAgentRunner
+        | AnalyticsServiceRunner
         | RagAgentRunner
         | VerifierAgentRunner
     ]:
@@ -298,13 +300,15 @@ class SimpleOrchestrator:
                 y_fields=("revenue",),
                 title="Revenue trend",
             ),
-            AgentName.ANALYTICS: AnalyticsAgentRunner(
-                model=AnalyticsModel.MOVING_AVERAGE,
-                metric_name="revenue",
-                horizon_days=3,
-                time_series=self._revenue_time_series(),
-                granularity="month",
+            AgentName.ANALYTICS: AnalyticsServiceRunner(
+                analytics_service=self._analytics_service,
                 trace_id=trace_id,
+                metric_id="revenue",
+                semantic_version_id="sem_v2",
+                time_column="month",
+                value_column="revenue",
+                grain=AnalyticsGrain.MONTH,
+                rows=self._revenue_rows(),
             ),
             AgentName.RAG: RagAgentRunner(
                 evidence_items=self._fallback_evidence_items(),
@@ -548,12 +552,3 @@ class SimpleOrchestrator:
             columns=("month", "revenue"),
             rows=self._revenue_rows(),
         )
-
-    def _revenue_time_series(self) -> tuple[TimeSeriesPoint, ...]:
-        points: list[TimeSeriesPoint] = []
-        for row in self._revenue_rows():
-            month = row["month"]
-            revenue = row["revenue"]
-            if isinstance(month, str) and isinstance(revenue, int | float):
-                points.append(TimeSeriesPoint(timestamp=month, value=float(revenue)))
-        return tuple(points)
