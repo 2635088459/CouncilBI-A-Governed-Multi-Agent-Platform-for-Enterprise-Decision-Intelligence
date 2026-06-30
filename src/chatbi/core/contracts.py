@@ -39,11 +39,20 @@ class AgentStepStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
+    TIMED_OUT = "timed_out"
 
 
 class QueryHistoryStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class TraceLinkedRecordType(StrEnum):
+    MESSAGE = "message"
+    QUERY_RESULT = "query_result"
+    AGENT_TRACE = "agent_trace"
+    AUDIT_EVENT = "audit_event"
+    EVAL_SCORE = "eval_score"
 
 
 class ErrorCode(StrEnum):
@@ -52,7 +61,10 @@ class ErrorCode(StrEnum):
     SQL_DENY_FUNCTION = "SQL_DENY_FUNCTION"
     SQL_DENY_TIMEOUT = "SQL_DENY_TIMEOUT"
     QUERY_TIMEOUT = "QUERY_TIMEOUT"
+    AGENT_TIMEOUT = "AGENT_TIMEOUT"
     AGENT_PARTIAL_FAILURE = "AGENT_PARTIAL_FAILURE"
+    RAG_UNAVAILABLE = "RAG_UNAVAILABLE"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
@@ -214,6 +226,58 @@ class QueryHistoryRecord:
         sql_text = self.answer.sql_text if self.answer is not None else None
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "sql_text", sql_text)
+
+
+@dataclass(frozen=True, slots=True)
+class TraceLinkedRecord:
+    trace_id: str
+    record_type: TraceLinkedRecordType
+    record_id: str
+
+    def __post_init__(self) -> None:
+        if not self.trace_id.strip():
+            raise ValueError("trace_id is required")
+        if not self.trace_id.startswith("trc_"):
+            raise ValueError("trace_id must start with 'trc_'")
+        if not self.record_id.strip():
+            raise ValueError("record_id is required")
+
+
+def build_trace_linked_records(
+    trace_id: str,
+    message_id: str,
+    query_result_id: str,
+    agent_trace_id: str,
+    audit_event_id: str,
+    eval_score_id: str,
+) -> tuple[TraceLinkedRecord, ...]:
+    return (
+        TraceLinkedRecord(
+            trace_id=trace_id,
+            record_type=TraceLinkedRecordType.MESSAGE,
+            record_id=message_id,
+        ),
+        TraceLinkedRecord(
+            trace_id=trace_id,
+            record_type=TraceLinkedRecordType.QUERY_RESULT,
+            record_id=query_result_id,
+        ),
+        TraceLinkedRecord(
+            trace_id=trace_id,
+            record_type=TraceLinkedRecordType.AGENT_TRACE,
+            record_id=agent_trace_id,
+        ),
+        TraceLinkedRecord(
+            trace_id=trace_id,
+            record_type=TraceLinkedRecordType.AUDIT_EVENT,
+            record_id=audit_event_id,
+        ),
+        TraceLinkedRecord(
+            trace_id=trace_id,
+            record_type=TraceLinkedRecordType.EVAL_SCORE,
+            record_id=eval_score_id,
+        ),
+    )
 
 
 class OrchestratorPort(Protocol):

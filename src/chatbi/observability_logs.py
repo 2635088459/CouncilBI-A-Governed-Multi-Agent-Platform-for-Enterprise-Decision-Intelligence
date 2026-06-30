@@ -32,12 +32,15 @@ class ObservabilityLogRecord:
     message: str
     endpoint: str
     user_id: str
+    service: str = "chatbi-api"
+    event: str = "log_recorded"
+    request_id: str | None = None
     attributes: Mapping[str, Any] = field(default_factory=_empty_log_attributes)
     recorded_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        if not self.trace_id.startswith("trc_"):
-            raise ValueError("trace_id must start with 'trc_'")
+        if not self.trace_id.startswith(("trc_", "tr_")):
+            raise ValueError("trace_id must start with 'trc_' or 'tr_'")
 
 
 class LogSanitizer:
@@ -154,6 +157,9 @@ class ObservabilityLogger:
         endpoint: str,
         user_id: str,
         attributes: Mapping[str, Any] | None = None,
+        service: str = "chatbi-api",
+        event: str = "log_recorded",
+        request_id: str | None = None,
     ) -> ObservabilityLogRecord:
         active_attributes: Mapping[str, Any] = attributes if attributes is not None else {}
         record = ObservabilityLogRecord(
@@ -162,6 +168,9 @@ class ObservabilityLogger:
             message=self._sanitizer.sanitize_message(message),
             endpoint=endpoint,
             user_id=self._sanitizer.sanitize_user_id(user_id),
+            service=service,
+            event=event,
+            request_id=request_id,
             attributes=self._sanitizer.sanitize_attributes(active_attributes),
         )
         self._store.add(record)

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from time import perf_counter
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 from chatbi.core.contracts import (
     AgentName,
     AgentStepStatus,
     AgentTraceEvent,
+    ErrorCode,
     utc_now,
 )
 
@@ -17,8 +18,28 @@ from chatbi.core.contracts import (
 T = TypeVar("T")
 
 
+class AgentTraceRepository(Protocol):
+    """Persistence boundary for agent trace events.
+
+    The in-memory implementation is used today. A PostgreSQL implementation can
+    later keep the same methods and write each event into a durable trace table.
+    """
+
+    def add(self, event: AgentTraceEvent) -> None:
+        """Persist one start, terminal, or skipped trace event."""
+        ...
+
+    def list_by_trace_id(self, trace_id: str) -> tuple[AgentTraceEvent, ...]:
+        """Load all events for one request trace."""
+        ...
+
+    def list_all(self) -> tuple[AgentTraceEvent, ...]:
+        """Load all trace events from this repository."""
+        ...
+
+
 class InMemoryAgentTraceLog:
-    """Small trace log used by tests and local orchestration runs."""
+    """Small trace repository used by tests and local orchestration runs."""
 
     def __init__(self) -> None:
         self._events: list[AgentTraceEvent] = []
@@ -36,11 +57,11 @@ class InMemoryAgentTraceLog:
 class AgentStepTracer:
     """Record start and terminal events around one agent step."""
 
-    def __init__(self, trace_log: InMemoryAgentTraceLog | None = None) -> None:
+    def __init__(self, trace_log: AgentTraceRepository | None = None) -> None:
         self._trace_log = trace_log or InMemoryAgentTraceLog()
 
     @property
-    def trace_log(self) -> InMemoryAgentTraceLog:
+    def trace_log(self) -> AgentTraceRepository:
         return self._trace_log
 
     def run_step(
@@ -61,6 +82,19 @@ class AgentStepTracer:
 
         try:
             result = action()
+        except TimeoutError:
+            duration_ms = self._duration_ms(started_at)
+            self._trace_log.add(
+                AgentTraceEvent(
+                    trace_id=trace_id,
+                    agent_name=agent_name,
+                    status=AgentStepStatus.TIMED_OUT,
+                    occurred_at=utc_now(),
+                    duration_ms=duration_ms,
+                    summary=ErrorCode.AGENT_TIMEOUT.value,
+                )
+            )
+            raise
         except Exception:
             duration_ms = self._duration_ms(started_at)
             self._trace_log.add(

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, cast
 
@@ -6,14 +7,61 @@ from chatbi.core.contracts import (
     AgentStepStatus,
     ErrorCode,
     Locale,
+    QueryAnswer,
     QueryHistoryStatus,
     QueryRequest,
+    TableResult,
     UserRole,
 )
+from chatbi.governance import ReadOnlyQueryResult, ReadOnlyQueryStatus
 from chatbi.knowledge import DocumentChunk, InMemoryKnowledgeStore, KnowledgeDocument
-from chatbi.orchestration.executor import PlanExecutor
+from chatbi.orchestration.answer_verification import AnswerAssemblyVerifier
+from chatbi.orchestration.executor import AgentRunner, AgentRunResult, PlanExecutionResult, PlanExecutor
+from chatbi.orchestration.routing import ExecutionPlan
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
+from chatbi.orchestration.state import InMemoryOrchestrationStateStore, RequestStateStage
 from chatbi.orchestration.tracing import AgentStepTracer, InMemoryAgentTraceLog
+
+
+class VerifierFailedExecutor(PlanExecutor):
+    def execute(
+        self,
+        trace_id: str,
+        plan: ExecutionPlan,
+        runners: Mapping[AgentName, AgentRunner],
+    ) -> PlanExecutionResult:
+        return PlanExecutionResult(
+            outputs={
+                AgentName.SQL: AgentRunResult(
+                    payload={"safe_sql": "SELECT month, revenue FROM revenue_by_month LIMIT 100"},
+                    confidence=0.9,
+                ),
+                AgentName.VERIFIER: AgentRunResult(
+                    payload={
+                        "verified": False,
+                        "reason": "Required fields were checked.",
+                        "findings": ("Required answer field(s) missing: table_result.",),
+                    },
+                    confidence=0.5,
+                ),
+            },
+            confidence=0.65,
+        )
+
+
+class FakeReadOnlyQueryExecutor:
+    def __init__(self, result: ReadOnlyQueryResult) -> None:
+        self.result = result
+        self.calls: list[tuple[str | None, str]] = []
+
+    def execute(self, database_url: str | None, sql_text: str) -> ReadOnlyQueryResult:
+        self.calls.append((database_url, sql_text))
+        return self.result
+
+
+class MissingSqlAnswerVerifier(AnswerAssemblyVerifier):
+    def verify(self, answer: QueryAnswer) -> QueryAnswer:
+        return super().verify(replace(answer, sql_text=""))
 
 
 def make_request(
@@ -40,6 +88,52 @@ def test_orchestrator_returns_structured_answer_for_valid_question() -> None:
     assert answer.table_result.columns == ("month", "revenue")
 
 
+def test_orchestrator_uses_readonly_query_executor_table_result_when_configured() -> None:
+    readonly_result = ReadOnlyQueryResult(
+        status=ReadOnlyQueryStatus.SUCCEEDED,
+        table_result=TableResult(
+            columns=("month", "revenue"),
+            rows=({"month": "2026-07", "revenue": 1400.0},),
+        ),
+    )
+    readonly_executor = FakeReadOnlyQueryExecutor(readonly_result)
+    orchestrator = SimpleOrchestrator(
+        readonly_query_executor=readonly_executor,
+        readonly_database_url="postgresql://chatbi_readonly:test@db:5432/chatbi",
+    )
+
+    answer = orchestrator.answer(make_request())
+
+    assert answer.table_result == readonly_result.table_result
+    assert readonly_executor.calls == [
+        (
+            "postgresql://chatbi_readonly:test@db:5432/chatbi",
+            "SELECT month, revenue FROM revenue_by_month LIMIT 100",
+        )
+    ]
+    assert answer.warnings == ()
+
+
+def test_orchestrator_falls_back_when_readonly_query_executor_fails() -> None:
+    readonly_executor = FakeReadOnlyQueryExecutor(
+        ReadOnlyQueryResult(
+            status=ReadOnlyQueryStatus.EXECUTION_FAILED,
+            message="Read-only query execution failed.",
+        )
+    )
+    orchestrator = SimpleOrchestrator(
+        readonly_query_executor=readonly_executor,
+        readonly_database_url="postgresql://chatbi_readonly:test@db:5432/chatbi",
+    )
+
+    answer = orchestrator.answer(make_request())
+
+    assert answer.table_result.columns == ("month", "revenue")
+    assert answer.table_result.rows[0] == {"month": "2026-01", "revenue": 1000.0}
+    assert answer.warnings[-1].code is ErrorCode.INTERNAL_ERROR
+    assert answer.warnings[-1].message == "Read-only query execution failed."
+
+
 def test_orchestrator_saves_successful_request_to_history() -> None:
     orchestrator = SimpleOrchestrator()
     request = make_request("Show monthly revenue.")
@@ -55,6 +149,54 @@ def test_orchestrator_saves_successful_request_to_history() -> None:
     assert replayed.sql_text == answer.sql_text
 
 
+def test_orchestrator_saves_request_state_by_trace_id() -> None:
+    state_store = InMemoryOrchestrationStateStore()
+    plan_executor = PlanExecutor(state_store=state_store)
+    orchestrator = SimpleOrchestrator(plan_executor=plan_executor)
+
+    answer = orchestrator.answer(make_request("What was total revenue last month?"))
+    state = state_store.get_request_state(answer.trace_id)
+
+    assert state is not None
+    assert state.stage is RequestStateStage.SUCCEEDED
+    assert state.input_summary["session_id"] == "s_001"
+    assert state.input_summary["role"] == "business_user"
+    assert state.output_summary is not None
+    assert state.output_summary["confidence"] == answer.confidence
+    assert state.latency_ms is not None
+    assert state.latency_ms >= 0
+
+
+def test_orchestrator_adds_warning_when_verifier_rejects_answer() -> None:
+    state_store = InMemoryOrchestrationStateStore()
+    plan_executor = VerifierFailedExecutor(state_store=state_store)
+    orchestrator = SimpleOrchestrator(plan_executor=plan_executor)
+
+    answer = orchestrator.answer(make_request("What was total revenue last month?"))
+    state = state_store.get_request_state(answer.trace_id)
+
+    assert answer.confidence == 0.65
+    assert answer.warnings[-1].code is ErrorCode.VERIFICATION_FAILED
+    assert "table_result" in answer.warnings[-1].message
+    assert state is not None
+    assert state.stage is RequestStateStage.DEGRADED
+    assert state.output_summary is not None
+    assert state.output_summary["warning_count"] == 1
+
+
+def test_orchestrator_runs_final_answer_assembly_verifier_before_saving() -> None:
+    orchestrator = SimpleOrchestrator(answer_verifier=MissingSqlAnswerVerifier())
+
+    answer = orchestrator.answer(make_request("What was total revenue last month?"))
+    replayed = orchestrator.replay(answer.trace_id)
+
+    assert answer.warnings[-1].code is ErrorCode.VERIFICATION_FAILED
+    assert "sql_text is required" in answer.warnings[-1].message
+    assert answer.confidence == 0.5
+    assert replayed is not None
+    assert replayed.answer == answer
+
+
 def test_orchestrator_blocks_drop_table_before_execution() -> None:
     orchestrator = SimpleOrchestrator()
 
@@ -64,6 +206,23 @@ def test_orchestrator_blocks_drop_table_before_execution() -> None:
     assert answer.warnings
     assert answer.warnings[0].code is ErrorCode.SQL_DENY_STATEMENT
     assert answer.table_result.rows[0]["status"] == "blocked"
+
+
+def test_orchestrator_marks_sql_denial_request_state_as_failed() -> None:
+    state_store = InMemoryOrchestrationStateStore()
+    plan_executor = PlanExecutor(state_store=state_store)
+    orchestrator = SimpleOrchestrator(plan_executor=plan_executor)
+
+    answer = orchestrator.answer(make_request("DROP TABLE orders"))
+    state = state_store.get_request_state(answer.trace_id)
+
+    assert state is not None
+    assert state.stage is RequestStateStage.FAILED
+    assert state.error is not None
+    assert state.error["code"] == "SQL_DENY_STATEMENT"
+    assert state.error["retryable"] is False
+    assert state.output_summary is not None
+    assert state.output_summary["confidence"] == 0.0
 
 
 def test_orchestrator_saves_failed_request_to_history() -> None:
@@ -104,11 +263,40 @@ def test_orchestrator_uses_execution_plan_for_forecast_question() -> None:
         if event.status is AgentStepStatus.SUCCEEDED
     )
 
-    assert terminal_agents == (AgentName.SQL, AgentName.ANALYTICS)
+    assert terminal_agents == (
+        AgentName.SQL,
+        AgentName.ANALYTICS,
+        AgentName.VERIFIER,
+        AgentName.ORCHESTRATOR,
+    )
     assert answer.analytics_result is not None
     forecast_result = cast(Mapping[str, Any], answer.analytics_result["forecast_result"])
     assert forecast_result["model_used"] == "moving_average"
     assert len(forecast_result["forecast_series"]) == 3
+
+
+def test_sql_only_request_traces_orchestrator_sql_and_verifier_steps() -> None:
+    trace_log = InMemoryAgentTraceLog()
+    plan_executor = PlanExecutor(tracer=AgentStepTracer(trace_log))
+    orchestrator = SimpleOrchestrator(plan_executor=plan_executor)
+
+    answer = orchestrator.answer(make_request("What was total revenue last month?"))
+    events = trace_log.list_by_trace_id(answer.trace_id)
+    succeeded_agents = tuple(
+        event.agent_name
+        for event in events
+        if event.status is AgentStepStatus.SUCCEEDED
+    )
+
+    assert succeeded_agents == (
+        AgentName.SQL,
+        AgentName.VERIFIER,
+        AgentName.ORCHESTRATOR,
+    )
+    assert events[0].agent_name is AgentName.ORCHESTRATOR
+    assert events[0].status is AgentStepStatus.STARTED
+    assert events[-1].agent_name is AgentName.ORCHESTRATOR
+    assert events[-1].status is AgentStepStatus.SUCCEEDED
 
 
 def test_orchestrator_attaches_chart_spec_for_kpi_query() -> None:

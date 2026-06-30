@@ -1,6 +1,7 @@
 from chatbi.core.contracts import ChartType, Locale, UserRole
 from chatbi.frontend.api_client import FrontendUserContext
 from chatbi.frontend.chat_state import ChatSessionStore, ChatTurnStatus
+from chatbi.frontend.ui_answer_state import UiAnswerStatus
 from chatbi.frontend.view_models import (
     ChartCardViewModel,
     MessageBubbleViewModel,
@@ -8,6 +9,7 @@ from chatbi.frontend.view_models import (
     QueryResultViewModel,
     SqlExplainCardViewModel,
     TableCardViewModel,
+    WarningBannerViewModel,
 )
 
 
@@ -44,6 +46,26 @@ class ErrorChatApiClient(FakeChatApiClient):
         raise ValueError("Backend API request failed.")
 
 
+class PartialFailureChatApiClient(FakeChatApiClient):
+    def submit_question(
+        self,
+        context: FrontendUserContext,
+        question: str,
+        idempotency_key: str | None = None,
+    ) -> QueryResultViewModel:
+        self.submitted_questions.append(question)
+        return _result(
+            trace_id="trc_partial",
+            warnings=(
+                WarningBannerViewModel(
+                    code="AGENT_PARTIAL_FAILURE",
+                    message="Visualization agent failed.",
+                    is_partial_failure=True,
+                ),
+            ),
+        )
+
+
 def test_submit_question_adds_user_turn_and_answer_result() -> None:
     api_client = FakeChatApiClient()
     store = ChatSessionStore(context=_context(), api_client=api_client)
@@ -57,7 +79,25 @@ def test_submit_question_adds_user_turn_and_answer_result() -> None:
     assert state.turns[0].status is ChatTurnStatus.ANSWERED
     assert state.turns[0].result is not None
     assert state.turns[0].result.trace_id == "trc_1"
+    assert state.answer_state.status is UiAnswerStatus.COMPLETED
+    assert state.answer_state.trace_id == "trc_1"
+    assert state.answer_state.answer_text == "Revenue trend is ready."
     assert api_client.submitted_questions == ["Show revenue trend."]
+
+
+def test_start_question_submission_moves_page_to_loading_state() -> None:
+    api_client = FakeChatApiClient()
+    store = ChatSessionStore(context=_context(), api_client=api_client)
+
+    state = store.start_question_submission("  Show revenue trend.  ")
+
+    assert state.is_loading is True
+    assert state.can_submit is False
+    assert state.error_message is None
+    assert state.turns[0].status is ChatTurnStatus.SUBMITTED
+    assert state.turns[0].question.text == "Show revenue trend."
+    assert state.answer_state.status is UiAnswerStatus.SUBMITTING
+    assert api_client.submitted_questions == []
 
 
 def test_submit_question_keeps_same_session_for_followups() -> None:
@@ -86,6 +126,21 @@ def test_submit_question_records_failure_without_losing_user_question() -> None:
     assert state.turns[0].question.text == "DROP TABLE orders"
     assert state.turns[0].status is ChatTurnStatus.FAILED
     assert state.turns[0].result is None
+    assert state.answer_state.status is UiAnswerStatus.FAILED
+    assert state.answer_state.error_code == "INTERNAL_ERROR"
+
+
+def test_submit_question_maps_partial_failure_to_warning_answer_state() -> None:
+    api_client = PartialFailureChatApiClient()
+    store = ChatSessionStore(context=_context(), api_client=api_client)
+
+    state = store.submit_question("Show revenue trend.")
+
+    assert state.turns[0].status is ChatTurnStatus.ANSWERED
+    assert state.answer_state.status is UiAnswerStatus.PARTIAL
+    assert state.answer_state.table_result is not None
+    assert state.answer_state.chart_spec is not None
+    assert state.answer_state.warnings[0]["code"] == "AGENT_PARTIAL_FAILURE"
 
 
 def test_replay_history_item_appends_replayed_turn() -> None:
@@ -102,6 +157,8 @@ def test_replay_history_item_appends_replayed_turn() -> None:
     assert state.turns[0].question.trace_id == "trc_history_001"
     assert state.turns[0].result is not None
     assert state.turns[0].result.trace_id == "trc_history_001"
+    assert state.answer_state.status is UiAnswerStatus.COMPLETED
+    assert state.answer_state.trace_id == "trc_history_001"
     assert api_client.replayed_trace_ids == ["trc_history_001"]
 
 
@@ -118,6 +175,7 @@ def test_submit_question_rejects_empty_question_before_api_call() -> None:
 
     assert api_client.submitted_questions == []
     assert store.state.turns == ()
+    assert store.state.answer_state.status is UiAnswerStatus.IDLE
 
 
 def _context() -> FrontendUserContext:
@@ -130,7 +188,10 @@ def _context() -> FrontendUserContext:
     )
 
 
-def _result(trace_id: str) -> QueryResultViewModel:
+def _result(
+    trace_id: str,
+    warnings: tuple[WarningBannerViewModel, ...] = (),
+) -> QueryResultViewModel:
     return QueryResultViewModel(
         trace_id=trace_id,
         answer=MessageBubbleViewModel(
@@ -138,7 +199,7 @@ def _result(trace_id: str) -> QueryResultViewModel:
             text="Revenue trend is ready.",
             trace_id=trace_id,
         ),
-        warnings=(),
+        warnings=warnings,
         table=TableCardViewModel(
             columns=("order_date", "revenue"),
             rows=({"order_date": "2026-06-18", "revenue": 1000},),

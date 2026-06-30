@@ -9,28 +9,56 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from chatbi.frontend.api_client import FrontendUserContext
 from chatbi.frontend.catalog_state import CatalogApiPort, CatalogPageState, CatalogPageStore
 from chatbi.frontend.chat_state import ChatApiPort, ChatPageState, ChatSessionStore
-from chatbi.frontend.component_props import ChatPageProps, build_chat_page_props
+from chatbi.frontend.component_props import (
+    CatalogPageProps,
+    ChatPageProps,
+    EvaluationPageProps,
+    HistoryPageProps,
+    TaskStatusPageProps,
+    build_catalog_page_props,
+    build_chat_page_props,
+    build_evaluation_page_props,
+    build_history_page_props,
+    build_task_status_page_props,
+)
 from chatbi.frontend.evaluation_state import (
     EvaluationApiPort,
     EvaluationPageState,
     EvaluationPageStore,
 )
 from chatbi.frontend.history_state import HistoryApiPort, HistoryPageState, HistoryPageStore
+from chatbi.frontend.task_status_page_state import (
+    TaskStatusApiPort,
+    TaskStatusPageState,
+    TaskStatusPageStore,
+)
+
+if TYPE_CHECKING:
+    from chatbi.frontend.app_screen_model import AppScreenModel
+    from chatbi.frontend.app_shell_props import AppShellProps
 
 
 class FrontendRoute(StrEnum):
     CHAT = "chat"
     HISTORY = "history"
     CATALOG = "catalog"
+    TASK_STATUS = "task_status"
     EVALUATION = "evaluation"
 
 
-class FrontendAppApiPort(ChatApiPort, HistoryApiPort, CatalogApiPort, EvaluationApiPort, Protocol):
+class FrontendAppApiPort(
+    ChatApiPort,
+    HistoryApiPort,
+    CatalogApiPort,
+    TaskStatusApiPort,
+    EvaluationApiPort,
+    Protocol,
+):
     """One API boundary that can power every frontend page store."""
 
 
@@ -40,6 +68,7 @@ class AppShellState:
     chat: ChatPageState
     history: HistoryPageState
     catalog: CatalogPageState
+    task_status: TaskStatusPageState
     evaluation: EvaluationPageState
 
 
@@ -56,6 +85,7 @@ class FrontendAppShell:
         self._chat_store = ChatSessionStore(context=context, api_client=api_client)
         self._history_store = HistoryPageStore(context=context, api_client=api_client)
         self._catalog_store = CatalogPageStore(context=context, api_client=api_client)
+        self._task_status_store = TaskStatusPageStore(context=context, api_client=api_client)
         self._evaluation_store = EvaluationPageStore(context=context, api_client=api_client)
 
     @property
@@ -65,6 +95,7 @@ class FrontendAppShell:
             chat=self._chat_store.state,
             history=self._history_store.state,
             catalog=self._catalog_store.state,
+            task_status=self._task_status_store.state,
             evaluation=self._evaluation_store.state,
         )
 
@@ -73,6 +104,40 @@ class FrontendAppShell:
             self._chat_store.state,
             self._context.locale,
         )
+
+    def task_status_props(self) -> TaskStatusPageProps:
+        return build_task_status_page_props(
+            self._task_status_store.state,
+            self._context.locale,
+        )
+
+    def history_props(self) -> HistoryPageProps:
+        return build_history_page_props(
+            self._history_store.state,
+            self._context.locale,
+        )
+
+    def catalog_props(self) -> CatalogPageProps:
+        return build_catalog_page_props(
+            self._catalog_store.state,
+            self._context.locale,
+        )
+
+    def evaluation_props(self) -> EvaluationPageProps:
+        return build_evaluation_page_props(
+            self._evaluation_store.state,
+            self._context.locale,
+        )
+
+    def shell_props(self) -> AppShellProps:
+        from chatbi.frontend.app_shell_props import build_app_shell_props
+
+        return build_app_shell_props(self.state, self._context.locale)
+
+    def screen_model(self) -> AppScreenModel:
+        from chatbi.frontend.app_screen_model import build_app_screen_model
+
+        return build_app_screen_model(self.state, self._context.locale)
 
     def navigate(self, route: FrontendRoute) -> AppShellState:
         self._route = route
@@ -131,6 +196,16 @@ class FrontendAppShell:
     def select_catalog_metric(self, metric_name: str) -> AppShellState:
         self._catalog_store.select_metric(metric_name)
         self._route = FrontendRoute.CATALOG
+        return self.state
+
+    def load_task_status(self, task_id: str) -> AppShellState:
+        self._task_status_store.load_task(task_id)
+        self._route = FrontendRoute.TASK_STATUS
+        return self.state
+
+    def refresh_current_task_status(self) -> AppShellState:
+        self._task_status_store.load_current_task()
+        self._route = FrontendRoute.TASK_STATUS
         return self.state
 
     def run_evaluation(

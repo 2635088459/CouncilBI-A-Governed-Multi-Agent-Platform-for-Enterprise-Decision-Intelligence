@@ -56,6 +56,17 @@ def test_guardrail_keeps_existing_limit() -> None:
     assert result.safe_sql == "SELECT month, revenue FROM revenue_by_month LIMIT 25"
 
 
+def test_guardrail_caps_existing_limit_above_configured_max_rows() -> None:
+    result = SimpleSqlGuardrail(default_row_limit=100).check(
+        "SELECT month, revenue FROM revenue_by_month LIMIT 10000",
+        make_request(),
+        new_trace_id(),
+    )
+
+    assert result.decision is GuardrailDecision.ALLOW
+    assert result.safe_sql == "SELECT month, revenue FROM revenue_by_month LIMIT 100"
+
+
 def test_guardrail_rejects_drop_table_statement() -> None:
     result = SimpleSqlGuardrail().check(
         "DROP TABLE orders",

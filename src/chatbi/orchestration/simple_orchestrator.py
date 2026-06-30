@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Mapping, TypeGuard, cast
+from time import perf_counter
+from typing import Mapping, Protocol, TypeGuard, cast
 
 from chatbi.agents.analytics_agent import (
     AnalyticsAgentRunner,
@@ -28,14 +29,17 @@ from chatbi.core.contracts import (
     WarningMessage,
     new_trace_id,
 )
+from chatbi.governance import ReadOnlyQueryResult
 from chatbi.governance.simple_guardrail import SimpleSqlGuardrail
 from chatbi.history.in_memory import InMemoryQueryHistory
 from chatbi.knowledge import InMemoryKnowledgeStore
+from chatbi.orchestration.answer_verification import AnswerAssemblyVerifier
 from chatbi.orchestration.executor import (
     PlanExecutor,
     PlanExecutionResult,
 )
 from chatbi.orchestration.routing import ExecutionPlanBuilder, QuestionClassifier
+from chatbi.orchestration.state import OrchestrationRequestState, RequestStateStage
 
 
 def _is_str_tuple(value: object) -> TypeGuard[tuple[str, ...]]:
@@ -52,6 +56,11 @@ def _is_evidence_tuple(value: object) -> TypeGuard[tuple[EvidenceItem, ...]]:
     return all(isinstance(item, EvidenceItem) for item in values)
 
 
+class ReadOnlyQueryRunner(Protocol):
+    def execute(self, database_url: str | None, sql_text: str) -> ReadOnlyQueryResult:
+        ...
+
+
 class SimpleOrchestrator:
     """Route one query through guardrail and history before responding."""
 
@@ -63,6 +72,9 @@ class SimpleOrchestrator:
         plan_builder: ExecutionPlanBuilder | None = None,
         plan_executor: PlanExecutor | None = None,
         knowledge_store: InMemoryKnowledgeStore | None = None,
+        answer_verifier: AnswerAssemblyVerifier | None = None,
+        readonly_query_executor: ReadOnlyQueryRunner | None = None,
+        readonly_database_url: str | None = None,
     ) -> None:
         self._guardrail = guardrail or SimpleSqlGuardrail()
         self._history = history or InMemoryQueryHistory()
@@ -70,6 +82,9 @@ class SimpleOrchestrator:
         self._plan_builder = plan_builder or ExecutionPlanBuilder()
         self._plan_executor = plan_executor or PlanExecutor()
         self._knowledge_store = knowledge_store
+        self._answer_verifier = answer_verifier or AnswerAssemblyVerifier()
+        self._readonly_query_executor = readonly_query_executor
+        self._readonly_database_url = readonly_database_url
 
     @property
     def history(self) -> InMemoryQueryHistory:
@@ -77,6 +92,58 @@ class SimpleOrchestrator:
 
     def answer(self, request: QueryRequest, trace_id: str | None = None) -> QueryAnswer:
         active_trace_id = trace_id or new_trace_id()
+        started_at = perf_counter()
+        self._save_request_state(
+            OrchestrationRequestState(
+                trace_id=active_trace_id,
+                stage=RequestStateStage.RUNNING,
+                input_summary={
+                    "session_id": request.session_id,
+                    "question_length": len(request.question),
+                    "role": request.role.value,
+                },
+            )
+        )
+
+        def run_orchestration() -> QueryAnswer:
+            return self._answer_with_active_trace(request, active_trace_id)
+
+        try:
+            answer = self._plan_executor.tracer.run_step(
+                trace_id=active_trace_id,
+                agent_name=AgentName.ORCHESTRATOR,
+                action=run_orchestration,
+            )
+        except Exception as exc:
+            self._save_request_state(
+                OrchestrationRequestState(
+                    trace_id=active_trace_id,
+                    stage=RequestStateStage.FAILED,
+                    input_summary={
+                        "session_id": request.session_id,
+                        "question_length": len(request.question),
+                        "role": request.role.value,
+                    },
+                    error={
+                        "code": ErrorCode.INTERNAL_ERROR.value,
+                        "message": str(exc),
+                        "retryable": True,
+                    },
+                    latency_ms=self._duration_ms(started_at),
+                )
+            )
+            raise
+
+        self._save_request_state(
+            self._request_state_from_answer(
+                request=request,
+                answer=answer,
+                latency_ms=self._duration_ms(started_at),
+            )
+        )
+        return answer
+
+    def _answer_with_active_trace(self, request: QueryRequest, active_trace_id: str) -> QueryAnswer:
         sql_candidate = self._build_sql_candidate(request)
         task_type = self._classifier.classify(request.question)
         plan = self._plan_builder.build(task_type)
@@ -109,16 +176,25 @@ class SimpleOrchestrator:
             )
             return answer
 
-        answer = self._build_success_answer(
-            trace_id=active_trace_id,
-            safe_sql=self._safe_sql_from_execution(execution_result, sql_candidate),
-            confidence=execution_result.confidence,
-            warnings=execution_result.warnings,
-            chart_spec=self._chart_spec_from_execution(execution_result),
-            analytics_result=self._analytics_from_execution(execution_result),
-            evidence_list=self._evidence_from_execution(execution_result),
-            evidence_uncertainty=self._evidence_uncertainty_from_execution(execution_result),
-            retrieval_stats=self._retrieval_stats_from_execution(execution_result),
+        safe_sql = self._safe_sql_from_execution(execution_result, sql_candidate)
+        table_result, readonly_warning = self._table_result_for_safe_sql(safe_sql)
+        warnings = self._warnings_from_execution(execution_result)
+        if readonly_warning is not None:
+            warnings = (*warnings, readonly_warning)
+
+        answer = self._answer_verifier.verify(
+            self._build_success_answer(
+                trace_id=active_trace_id,
+                safe_sql=safe_sql,
+                table_result=table_result,
+                confidence=execution_result.confidence,
+                warnings=warnings,
+                chart_spec=self._chart_spec_from_execution(execution_result),
+                analytics_result=self._analytics_from_execution(execution_result),
+                evidence_list=self._evidence_from_execution(execution_result),
+                evidence_uncertainty=self._evidence_uncertainty_from_execution(execution_result),
+                retrieval_stats=self._retrieval_stats_from_execution(execution_result),
+            )
         )
         self._history.save(
             QueryHistoryRecord(
@@ -131,6 +207,70 @@ class SimpleOrchestrator:
 
     def replay(self, trace_id: str) -> QueryHistoryRecord | None:
         return self._history.get(trace_id)
+
+    def _save_request_state(self, state: OrchestrationRequestState) -> None:
+        self._plan_executor.state_store.save_request_state(state)
+
+    def _duration_ms(self, started_at: float) -> int:
+        return max(0, int((perf_counter() - started_at) * 1000))
+
+    def _request_state_from_answer(
+        self,
+        request: QueryRequest,
+        answer: QueryAnswer,
+        latency_ms: int,
+    ) -> OrchestrationRequestState:
+        input_summary = {
+            "session_id": request.session_id,
+            "question_length": len(request.question),
+            "role": request.role.value,
+        }
+        output_summary = {
+            "confidence": answer.confidence,
+            "warning_count": len(answer.warnings),
+            "has_chart": answer.chart_spec is not None,
+            "has_analytics": answer.analytics_result is not None,
+            "evidence_count": len(answer.evidence_list),
+        }
+
+        sql_denial = self._sql_denial_from_answer(answer)
+        if sql_denial is not None:
+            return OrchestrationRequestState(
+                trace_id=answer.trace_id,
+                stage=RequestStateStage.FAILED,
+                input_summary=input_summary,
+                output_summary=output_summary,
+                error={
+                    "code": sql_denial.code.value,
+                    "message": sql_denial.message,
+                    "retryable": False,
+                },
+                latency_ms=latency_ms,
+            )
+
+        return OrchestrationRequestState(
+            trace_id=answer.trace_id,
+            stage=(
+                RequestStateStage.DEGRADED
+                if answer.warnings
+                else RequestStateStage.SUCCEEDED
+            ),
+            input_summary=input_summary,
+            output_summary=output_summary,
+            latency_ms=latency_ms,
+        )
+
+    def _sql_denial_from_answer(self, answer: QueryAnswer) -> WarningMessage | None:
+        denial_codes = {
+            ErrorCode.SQL_DENY_STATEMENT,
+            ErrorCode.SQL_DENY_OBJECT,
+            ErrorCode.SQL_DENY_FUNCTION,
+            ErrorCode.SQL_DENY_TIMEOUT,
+        }
+        for warning in answer.warnings:
+            if warning.code in denial_codes:
+                return warning
+        return None
 
     def _build_runners(
         self,
@@ -178,6 +318,7 @@ class SimpleOrchestrator:
                 verified=True,
                 confidence=0.9,
                 reason="Mock answer passes baseline verification.",
+                sql_text=sql_candidate,
             ),
         }
 
@@ -200,6 +341,39 @@ class SimpleOrchestrator:
                 return warning
         return None
 
+    def _warnings_from_execution(
+        self,
+        execution_result: PlanExecutionResult,
+    ) -> tuple[WarningMessage, ...]:
+        warnings = list(execution_result.warnings)
+        verifier_warning = self._verifier_warning_from_execution(execution_result)
+        if verifier_warning is not None:
+            warnings.append(verifier_warning)
+        return tuple(warnings)
+
+    def _verifier_warning_from_execution(
+        self,
+        execution_result: PlanExecutionResult,
+    ) -> WarningMessage | None:
+        verifier_output = execution_result.outputs.get(AgentName.VERIFIER)
+        if verifier_output is None:
+            return None
+
+        verified = verifier_output.payload.get("verified")
+        if verified is not False:
+            return None
+
+        findings = verifier_output.payload.get("findings")
+        if _is_str_tuple(findings):
+            finding_text = "; ".join(findings)
+        else:
+            finding_text = "Verifier rejected the assembled answer."
+
+        return WarningMessage(
+            code=ErrorCode.VERIFICATION_FAILED,
+            message=f"Verifier rejected the assembled answer: {finding_text}",
+        )
+
     def _safe_sql_from_execution(
         self,
         execution_result: PlanExecutionResult,
@@ -210,6 +384,20 @@ class SimpleOrchestrator:
             return fallback_sql
         safe_sql = sql_output.payload.get("safe_sql")
         return safe_sql if isinstance(safe_sql, str) else fallback_sql
+
+    def _table_result_for_safe_sql(self, safe_sql: str) -> tuple[TableResult, WarningMessage | None]:
+        fallback_table_result = self._fallback_table_result()
+        if self._readonly_query_executor is None:
+            return fallback_table_result, None
+
+        result = self._readonly_query_executor.execute(self._readonly_database_url, safe_sql)
+        if result.succeeded and result.table_result is not None:
+            return result.table_result, None
+
+        return fallback_table_result, WarningMessage(
+            code=ErrorCode.INTERNAL_ERROR,
+            message=result.message or "Read-only query execution failed.",
+        )
 
     def _chart_spec_from_execution(self, execution_result: PlanExecutionResult) -> ChartSpec | None:
         chart_output = execution_result.outputs.get(AgentName.VISUALIZATION)
@@ -297,6 +485,7 @@ class SimpleOrchestrator:
         self,
         trace_id: str,
         safe_sql: str,
+        table_result: TableResult,
         confidence: float,
         warnings: tuple[WarningMessage, ...],
         chart_spec: ChartSpec | None,
@@ -308,10 +497,7 @@ class SimpleOrchestrator:
         return QueryAnswer(
             answer_text="Revenue trend is ready.",
             sql_text=safe_sql,
-            table_result=TableResult(
-                columns=("month", "revenue"),
-                rows=self._revenue_rows(),
-            ),
+            table_result=table_result,
             trace_id=trace_id,
             chart_spec=chart_spec,
             analytics_result=analytics_result,
@@ -355,6 +541,12 @@ class SimpleOrchestrator:
             {"month": "2026-04", "revenue": 1210.0},
             {"month": "2026-05", "revenue": 1290.0},
             {"month": "2026-06", "revenue": 1350.0},
+        )
+
+    def _fallback_table_result(self) -> TableResult:
+        return TableResult(
+            columns=("month", "revenue"),
+            rows=self._revenue_rows(),
         )
 
     def _revenue_time_series(self) -> tuple[TimeSeriesPoint, ...]:

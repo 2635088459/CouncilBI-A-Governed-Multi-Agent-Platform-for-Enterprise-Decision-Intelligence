@@ -1,94 +1,81 @@
 # Verification: 05 Data Model
 
-This document records the current machine-verifiable status for the MVP implementation slice based on `spec/version1/05-data-model.spec.md`.
+This document records the current machine-verifiable status for `spec/version2/05-data-model.spec.md`.
 
 ## Scope
 
 Verified workflows:
 
 ```text
-data model metadata
-  -> DataModelCatalog
-  -> business, semantic, knowledge, runtime, and config/cache table definitions
-  -> primary keys, foreign keys, partition columns, retention days, sensitivity tags
+v2 PostgreSQL migration foundation
+  -> schema_migrations metadata
+  -> business, semantic, runtime, governance, evaluation, knowledge schemas
+  -> runtime.sessions, runtime.messages, runtime.query_history, runtime.query_results, runtime.agent_traces
+  -> semantic.semantic_versions, semantic.metrics, semantic.dimensions
+  -> knowledge.documents, knowledge.doc_chunks, knowledge.doc_embeddings metadata
+  -> governance.access_policies, query_audit_events, sql_rule_hits
+  -> evaluation.eval_cases, evaluation.eval_runs, evaluation.eval_scores
 
-core metric definitions
-  -> DataModelCatalog metric registry
-  -> MetricEvaluator
-  -> canonical SQL definition lookup
-  -> seed-row metric calculation
+seed reproducibility
+  -> revenue KPI fixture
+  -> anomaly/RAG policy document fixture
+  -> restricted P0 field policy fixture
+  -> completed demo query fixture using trace_id trc_demo_revenue_2026_h1
 
-data quality rules
-  -> table quality_rules
-  -> DataQualityValidator
-  -> non-null primary key, non-negative amount, and partition-column checks
+trace-based replay
+  -> DEMO_TRACE_JOIN_SQL
+  -> TraceLinkedRecord / TraceLinkedRecordType
+  -> build_trace_linked_records
+  -> PostgresTraceLinkedRecordStore
 
-sensitive field governance
-  -> P0/P1 classification in DataModelCatalog
-  -> SimpleSqlGuardrail denies P0 field access
-  -> PiiResultMasker masks P1 result fields
+runtime query history persistence
+  -> RuntimeQueryHistoryRecord
+  -> PostgresRuntimeQueryHistoryStore
+  -> get(trace_id)
+  -> list_by_session(session_id, limit)
+  -> session_id + created_at lookup index metadata
+  -> optional live PostgreSQL 10,000-row session lookup benchmark
 
-runtime governance records
-  -> QueryHistoryRecord
-  -> InMemoryQueryHistory
-  -> GuardrailAuditRecord / InMemoryGuardrailAuditLog
-  -> AgentTraceEvent / InMemoryAgentTraceLog
-  -> trace_id linkage across history, audit, and agent traces
-
-partition pruning guard
-  -> PartitionPruningChecker
-  -> generated revenue SQL
-  -> orders.order_date lower and upper bound checks
-
-knowledge retrieval model
-  -> KnowledgeDocument
-  -> DocumentChunk
-  -> ChunkEmbedding
-  -> InMemoryKnowledgeStore
-  -> RagAgentRunner
-  -> SimpleOrchestrator evidence_list
+metadata alignment
+  -> DataModelCatalog query_history metadata matches migration fields
+  -> final_answer is modeled as durable runtime data
+  -> session and status lookup indexes are represented in metadata
 ```
-
-This slice verifies the data-model metadata, executable data quality checks, canonical metrics on seed rows, P0/P1 governance integration, in-memory runtime governance stores, partition-filter checks for generated SQL, and an in-memory knowledge store feeding RAG evidence.
-
-It does not yet create real database DDL, run real database constraints, run a physical `EXPLAIN` plan, or build a real vector index.
 
 ## Covered Requirements
 
 | Requirement | Verification |
 |---|---|
-| `FR-05-001` | `tests/test_data_model.py` verifies the required business tables: orders, refunds, customers, products, regions, web_events, support_tickets, marketing_campaigns |
-| `FR-05-002` | `tests/test_data_model.py` verifies canonical metric definitions; `tests/test_metrics.py` verifies metric lookup and seed-row evaluation |
-| `FR-05-003` | `tests/test_data_model.py` verifies documents/doc_chunks/doc_embeddings metadata; `tests/test_knowledge_store.py` verifies source_id, doc_type, publish_time, chunk, and embedding storage |
-| `FR-05-004` | `tests/test_simple_orchestrator.py`, `tests/test_in_memory_history.py`, and `tests/test_app.py` verify query_history records by trace_id |
-| `FR-05-005` | `tests/test_simple_guardrail.py` verifies guardrail audit records, audit_event_id generation, and multiple audit events per trace_id |
-| `FR-05-006` | `tests/test_agent_step_tracing.py` verifies agent_trace_id and trace_id-linked agent step events |
-| `FR-05-007` | `tests/test_data_model.py` verifies P0/P1 sensitivity tags; `tests/test_simple_guardrail.py` and `tests/test_pii_masking.py` verify governance behavior based on those tags |
-| `NFR-05-001` | `tests/test_partitioning.py` verifies generated orders SQL includes partition-column lower and upper bounds |
-| `NFR-05-002` | `tests/test_data_quality.py` verifies executable quality rules for non-null primary keys, non-negative amounts, and required partition columns |
-| `NFR-05-003` | `tests/test_simple_guardrail.py` verifies P0 denial; `tests/test_pii_masking.py` verifies P1 result masking |
-| `NFR-05-004` | `tests/test_data_model.py` verifies 180-day retention metadata for query_history and audit_events |
+| `FR-05-001` | `tests/test_migrations.py` verifies all six v2 schemas are emitted by migration SQL. |
+| `FR-05-002` | `tests/test_migrations.py` verifies `runtime.sessions`, `runtime.messages`, `runtime.query_history`, `runtime.query_results`, and `runtime.agent_traces`. |
+| `FR-05-003` | `tests/test_migrations.py` verifies `semantic.semantic_versions`, `semantic.metrics`, and `semantic.dimensions`; `tests/test_data_model.py` verifies semantic metadata. |
+| `FR-05-004` | `tests/test_migrations.py` verifies `knowledge.documents`, `knowledge.doc_chunks`, and `knowledge.doc_embeddings` metadata and seed data. |
+| `FR-05-005` | `tests/test_migrations.py` verifies the completed demo query seed across runtime, audit, and evaluation tables. |
+| `FR-05-006` | `tests/test_migrations.py`, `tests/test_trace_linked_record_store.py`, and `tests/test_overall_architecture.py` verify trace-linked join contracts. |
+| `NFR-05-002` | `tests/test_migrations.py`, `tests/test_data_model.py`, and `tests/test_runtime_query_history_store.py` verify the session_id + created_at lookup path. `tests/test_data_model_query_history_benchmark.py` seeds 10,000 live PostgreSQL rows and verifies the recent-history lookup when `DATABASE_URL` is available. |
+| `NFR-05-003` | `tests/test_migrations.py` verifies required indexes and the unique `runtime.query_results.trace_id` constraint. |
+| `NFR-05-004` | Pyright passes for data model and repository files listed below. |
 
 ## Acceptance Criteria
 
 | Acceptance Criterion | Verification |
 |---|---|
-| `AC-05-001` | `tests/test_metrics.py` verifies `revenue` canonical SQL and computes paid-order revenue on seed rows |
-| `AC-05-002` | `tests/test_simple_guardrail.py` verifies P0 fields such as `customers.customer_id` and `orders.customer_id` are denied before execution |
-| `AC-05-003` | `tests/test_pii_masking.py` verifies P1 fields such as `user_email`, `phone`, and `customer_name` are masked in results |
-| `AC-05-004` | `tests/test_simple_orchestrator.py` and `tests/test_in_memory_history.py` verify query_history records with trace_id |
-| `AC-05-005` | `tests/test_partitioning.py` verifies generated revenue SQL filters `orders.order_date` with lower and upper bounds; physical `EXPLAIN` remains future work |
+| `AC-05-001` | `tests/test_migrations.py` verifies schemas `business`, `semantic`, `runtime`, `governance`, `evaluation`, and `knowledge`. |
+| `AC-05-002` | `tests/test_migrations.py` verifies seed metric `revenue`, one session, one RAG document, and one restricted field policy. |
+| `AC-05-003` | `tests/test_migrations.py` verifies `runtime.query_results.trace_id` is unique. `tests/test_data_model_postgres_integration.py` performs the physical duplicate insert check when `DATABASE_URL` is available. |
+| `AC-05-004` | `DEMO_TRACE_JOIN_SQL` and `PostgresTraceLinkedRecordStore` verify one demo query can join message, query_result, agent_trace, audit_event, and eval_score by trace id. |
+| `AC-05-005` | `runtime.query_history` has `idx_runtime_query_history_session_created_at`; `PostgresRuntimeQueryHistoryStore.list_by_session` uses `WHERE session_id`, `ORDER BY created_at DESC`, and `LIMIT`. `tests/test_data_model_query_history_benchmark.py` performs live `EXPLAIN` plus 10,000-row lookup verification when `DATABASE_URL` is available. |
 
 ## Test Plan Mapping
 
 | Test Case | Current Verification |
 |---|---|
-| `TC-05-001` | `tests/test_data_quality.py` covers null primary key and negative amount failures at the row-validation layer |
-| `TC-05-002` | `tests/test_metrics.py` covers revenue SQL definition and seed-row expected revenue |
-| `TC-05-003` | `tests/test_simple_guardrail.py` covers P0 field denial before database execution |
-| `TC-05-004` | `tests/test_pii_masking.py` covers P1 masking in returned table results |
-| `TC-05-005` | `tests/test_simple_orchestrator.py`, `tests/test_in_memory_history.py`, and `tests/test_app.py` cover query_history creation |
-| `TC-05-006` | `tests/test_partitioning.py` covers partition-filter SQL checks; physical EXPLAIN is not implemented in the MVP |
+| `TC-05-001` | Pyright validates `src/chatbi/data_model.py`, `src/chatbi/migrations.py`, `src/chatbi/history/query_history.py`, and `src/chatbi/history/trace_links.py`. |
+| `TC-05-002` | `tests/test_migrations.py` verifies migration SQL can create the v2 schema surface from a blank database shape. |
+| `TC-05-003` | `tests/test_migrations.py` verifies KPI, RAG, permission, evaluation, and completed query fixtures. |
+| `TC-05-004` | `tests/test_migrations.py` verifies the unique trace constraint declaration; `tests/test_data_model_postgres_integration.py` performs the physical duplicate insert check when `DATABASE_URL` is available. |
+| `TC-05-005` | `tests/test_trace_linked_record_store.py` verifies joined trace rows become typed `TraceLinkedRecord` objects. |
+| `TC-05-006` | `tests/test_runtime_query_history_store.py` verifies the session history query shape; `tests/test_data_model_query_history_benchmark.py` verifies the physical 10,000-row lookup path when `DATABASE_URL` is available. |
 
 ## Latest Local Verification
 
@@ -99,10 +86,56 @@ Virtual environment: .venv
 Python: 3.14.0
 ```
 
-Layer 1 static check:
+Focused test suite:
 
 ```bash
-.venv/bin/pyright
+.venv/bin/python -m pytest tests/test_data_model.py tests/test_migrations.py tests/test_runtime_query_history_store.py
+```
+
+Result:
+
+```text
+55 passed
+```
+
+Additional repository/contract tests:
+
+```bash
+.venv/bin/python -m pytest tests/test_runtime_query_history_store.py tests/test_migrations.py tests/test_trace_linked_record_store.py
+```
+
+Result:
+
+```text
+42 passed
+```
+
+Focused suite including live PostgreSQL integration hook:
+
+```bash
+.venv/bin/python -m pytest tests/test_data_model_query_history_benchmark.py tests/test_data_model_postgres_integration.py tests/test_data_model.py tests/test_migrations.py tests/test_runtime_query_history_store.py tests/test_trace_linked_record_store.py
+```
+
+Result in the current local shell:
+
+```text
+58 passed, 2 skipped
+```
+
+Skipped test:
+
+```text
+tests/test_data_model_postgres_integration.py requires DATABASE_URL.
+tests/test_data_model_query_history_benchmark.py requires DATABASE_URL.
+```
+
+Static checks:
+
+```bash
+.venv/bin/pyright src/chatbi/data_model.py tests/test_data_model.py
+.venv/bin/pyright src/chatbi/history/query_history.py tests/test_runtime_query_history_store.py
+.venv/bin/pyright src/chatbi/migrations.py tests/test_migrations.py src/chatbi/history/trace_links.py tests/test_trace_linked_record_store.py
+.venv/bin/pyright tests/test_data_model_query_history_benchmark.py tests/test_data_model_postgres_integration.py src/chatbi/history/query_history.py src/chatbi/migrations.py
 ```
 
 Result:
@@ -111,52 +144,8 @@ Result:
 0 errors, 0 warnings, 0 informations
 ```
 
-Layer 2 test suite:
+## Remaining Work
 
-```bash
-.venv/bin/python -m pytest
-```
-
-Result:
-
-```text
-170 passed, 1 warning
-```
-
-Known warning:
-
-```text
-StarletteDeprecationWarning from fastapi.testclient
-```
-
-This warning comes from the third-party FastAPI/TestClient stack and does not indicate a failing project test.
-
-## MVP Notes
-
-The current slice is intentionally metadata-first and in-memory:
-
-- Table definitions are Python metadata, not emitted database DDL.
-- Data quality checks run on row-like dictionaries, not real database constraints.
-- Partition pruning is verified by SQL shape checks, not physical database `EXPLAIN`.
-- Knowledge storage is in-memory and supports metadata filtering, but not vector similarity search.
-- Metrics are evaluated against seed-row data, not pushed down into an OLTP or warehouse engine.
-
-## Next Slice
-
-Recommended next implementation slice:
-
-```text
-06 Backend API
-  -> expose current orchestrator workflow through API models
-  -> decide which in-memory stores become request-scoped, app-scoped, or database-backed
-  -> prepare persistence boundaries for query_history, audit_events, agent_traces, and knowledge records
-```
-
-If the project wants to deepen spec 05 first, the next data-model step should be:
-
-```text
-DDL generation
-  -> DataModelCatalog
-  -> PostgreSQL-compatible CREATE TABLE statements
-  -> unit tests for primary keys, foreign keys, partition columns, and retention metadata
-```
+- Run the base migration against a real blank PostgreSQL database in CI.
+- Run `tests/test_data_model_postgres_integration.py` and `tests/test_data_model_query_history_benchmark.py` with `DATABASE_URL` in CI to exercise the physical PostgreSQL checks.
+- Keep `query_audit_events` and `sql_rule_hits` unqualified for now so spec 5 stays compatible with the existing governance audit repositories from spec 4.

@@ -19,7 +19,7 @@ Every spec follows SDD + TDD: scope → numbered requirements → contracts → 
 | Traceability Matrix | SDD+TDD | FR → AC → TC linkage |
 | Open Questions | Both | Pending decisions that affect design or tests |
 
-Before implementation, review each spec against [Spec Review Gate](version1/spec-review-gate.md). A requirement is not implementation-ready until it maps to a type constraint, test case, benchmark, or compliance assertion.
+Before implementation, review each spec against [Spec Review Gate](version1/spec-review-gate.md). A requirement is not implementation-ready until it maps to a type constraint, test case, benchmark, or compliance assertion. For v2 implementation, use the v2 specs below as the current source of truth.
 
 ---
 
@@ -37,6 +37,23 @@ Before implementation, review each spec against [Spec Review Gate](version1/spec
 | 08 | [08-rag.spec.md](version1/08-rag.spec.md) | RAG Retrieval + Evidence | Draft |
 | 09 | [09-analytics-and-forecasting.spec.md](version1/09-analytics-and-forecasting.spec.md) | Analytics + Forecasting | Draft |
 | 10 | [10-evaluation-and-observability.spec.md](version1/10-evaluation-and-observability.spec.md) | Evaluation + Observability | Draft |
+
+---
+
+## Version 2 Spec Index
+
+| # | File | System Part | Status |
+|---|---|---|---|
+| 01 | [01-overall-architecture.spec.md](version2/01-overall-architecture.spec.md) | Overall Architecture | Verifiable Draft |
+| 02 | [02-agent-orchestration.spec.md](version2/02-agent-orchestration.spec.md) | Agent Orchestration | Verifiable Draft |
+| 03 | [03-semantic-layer-and-nl2sql.spec.md](version2/03-semantic-layer-and-nl2sql.spec.md) | Semantic Layer + NL2SQL | Verifiable Draft |
+| 04 | [04-sql-guardrail-and-governance.spec.md](version2/04-sql-guardrail-and-governance.spec.md) | SQL Guardrail + Governance | Verifiable Draft |
+| 05 | [05-data-model.spec.md](version2/05-data-model.spec.md) | Data Model | Verifiable Draft |
+| 06 | [06-backend-api.spec.md](version2/06-backend-api.spec.md) | Backend API | Verifiable Draft |
+| 07 | [07-frontend-chatbi.spec.md](version2/07-frontend-chatbi.spec.md) | Frontend ChatBI | Verifiable Draft |
+| 08 | [08-rag.spec.md](version2/08-rag.spec.md) | RAG Retrieval + Evidence | Verifiable Draft |
+| 09 | [09-analytics-and-forecasting.spec.md](version2/09-analytics-and-forecasting.spec.md) | Analytics + Forecasting | Verifiable Draft |
+| 10 | [10-evaluation-and-observability.spec.md](version2/10-evaluation-and-observability.spec.md) | Evaluation + Observability | Verifiable Draft |
 
 ---
 

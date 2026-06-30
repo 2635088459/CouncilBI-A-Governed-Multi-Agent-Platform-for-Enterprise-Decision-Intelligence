@@ -7,9 +7,15 @@ API routes, which keeps the frontend boundary clean and matches spec/07.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any, Mapping, Protocol, cast
 
 from chatbi.core.contracts import Locale, UserRole, new_trace_id
+from chatbi.frontend.observability import FrontendLogger
+from chatbi.frontend.task_status_state import (
+    TaskStatusViewModel,
+    build_task_status_view_model,
+)
 from chatbi.frontend.view_models import QueryResultViewModel, build_query_result_view_model
 
 
@@ -56,6 +62,54 @@ class MetricCatalogViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class FrontendApiError:
+    code: str
+    message: str
+    retryable: bool
+
+
+class FrontendApiException(ValueError):
+    """Raised when the backend returns an error envelope."""
+
+    def __init__(
+        self,
+        error: FrontendApiError,
+        trace_id: str | None,
+        request_id: str,
+    ) -> None:
+        super().__init__(error.message)
+        self.error = error
+        self.trace_id = trace_id
+        self.request_id = request_id
+
+
+@dataclass(frozen=True, slots=True)
+class FrontendApiEnvelope:
+    data: Mapping[str, Any] | None
+    warnings: tuple[Mapping[str, Any], ...]
+    error: FrontendApiError | None
+    trace_id: str | None
+    request_id: str
+
+    def as_mapping(self) -> Mapping[str, Any]:
+        """Return the normalized shape expected by existing view-model builders."""
+
+        return {
+            "data": self.data,
+            "warnings": self.warnings,
+            "error": None
+            if self.error is None
+            else {
+                "code": self.error.code,
+                "message": self.error.message,
+                "retryable": self.error.retryable,
+            },
+            "trace_id": self.trace_id,
+            "request_id": self.request_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationRunViewModel:
     eval_run_id: str
     eval_suite_id: str
@@ -70,8 +124,17 @@ class EvaluationRunViewModel:
 
 
 class FrontendApiClient:
-    def __init__(self, transport: JsonTransport) -> None:
+    def __init__(
+        self,
+        transport: JsonTransport,
+        logger: FrontendLogger | None = None,
+    ) -> None:
         self._transport = transport
+        self._logger = logger or FrontendLogger()
+
+    @property
+    def logger(self) -> FrontendLogger:
+        return self._logger
 
     def submit_question(
         self,
@@ -87,6 +150,13 @@ class FrontendApiClient:
             trace_id=trace_id,
             idempotency_key=idempotency_key,
         )
+        self._logger.record_query_submitted(
+            request_id=headers["X-Request-Id"],
+            session_id=context.session_id,
+            trace_id=trace_id,
+            user_id=context.user_id,
+        )
+        start_time = perf_counter()
         envelope = self._transport.post_json(
             path="/api/v1/chat/query",
             headers=headers,
@@ -98,8 +168,19 @@ class FrontendApiClient:
                 "role": context.role.value,
             },
         )
-        _raise_if_error_envelope(envelope)
-        return build_query_result_view_model(envelope)
+        parsed = parse_api_envelope(envelope)
+        self._logger.record_api_request_completed(
+            request_id=parsed.request_id,
+            session_id=context.session_id,
+            trace_id=parsed.trace_id or trace_id,
+            user_id=context.user_id,
+            route="/api/v1/chat/query",
+            duration_ms=(perf_counter() - start_time) * 1000,
+            status="failed" if parsed.error is not None else "succeeded",
+            error_code=None if parsed.error is None else parsed.error.code,
+        )
+        _raise_if_error_envelope(parsed)
+        return build_query_result_view_model(parsed.as_mapping())
 
     def load_history(
         self,
@@ -118,8 +199,9 @@ class FrontendApiClient:
                 **({"cursor": cursor} if cursor is not None else {}),
             },
         )
-        _raise_if_error_envelope(envelope)
-        data = _data(envelope)
+        parsed = parse_api_envelope(envelope)
+        _raise_if_error_envelope(parsed)
+        data = _data(parsed)
         return HistoryListViewModel(
             items=tuple(_list(data.get("items"), field_name="data.items")),
             next_cursor=_optional_string(data.get("next_cursor"), field_name="data.next_cursor"),
@@ -138,16 +220,16 @@ class FrontendApiClient:
             headers=_headers(context=context, trace_id=new_trace_id()),
             query={"user_id": context.user_id},
         )
-        _raise_if_error_envelope(envelope)
-        data = _data(envelope)
+        parsed = parse_api_envelope(envelope)
+        _raise_if_error_envelope(parsed)
+        data = _data(parsed)
         answer = _mapping(data.get("answer"), field_name="data.answer")
         replay_envelope = {
-            "code": envelope["code"],
-            "message": envelope["message"],
             "data": answer,
             "trace_id": trace_id,
-            "warnings": envelope.get("warnings", ()),
-            "timestamp": envelope["timestamp"],
+            "warnings": parsed.warnings,
+            "error": None,
+            "request_id": parsed.request_id,
         }
         return build_query_result_view_model(replay_envelope)
 
@@ -159,11 +241,28 @@ class FrontendApiClient:
             headers=_headers(context=context, trace_id=new_trace_id()),
             query={"user_id": context.user_id},
         )
-        _raise_if_error_envelope(envelope)
-        data = _data(envelope)
+        parsed = parse_api_envelope(envelope)
+        _raise_if_error_envelope(parsed)
+        data = _data(parsed)
         return MetricCatalogViewModel(
             metrics=tuple(_list(data.get("metrics"), field_name="data.metrics")),
         )
+
+    def load_task_status(
+        self,
+        context: FrontendUserContext,
+        task_id: str,
+    ) -> TaskStatusViewModel:
+        """GET one long-running task status by task id."""
+
+        envelope = self._transport.get_json(
+            path=f"/api/v1/chat/tasks/{task_id}",
+            headers=_headers(context=context, trace_id=new_trace_id()),
+            query={"user_id": context.user_id},
+        )
+        parsed = parse_api_envelope(envelope)
+        _raise_if_error_envelope(parsed)
+        return build_task_status_view_model(_data(parsed), context.locale)
 
     def run_evaluation(
         self,
@@ -184,8 +283,9 @@ class FrontendApiClient:
                 "role": context.role.value,
             },
         )
-        _raise_if_error_envelope(envelope)
-        data = _data(envelope)
+        parsed = parse_api_envelope(envelope)
+        _raise_if_error_envelope(parsed)
+        data = _data(parsed)
         return EvaluationRunViewModel(
             eval_run_id=_string(data.get("eval_run_id"), field_name="data.eval_run_id"),
             eval_suite_id=_string(data.get("eval_suite_id"), field_name="data.eval_suite_id"),
@@ -217,23 +317,91 @@ def _headers(
     trace_id: str,
     idempotency_key: str | None = None,
 ) -> Mapping[str, str]:
+    request_id = _request_id_from_trace_id(trace_id)
     headers = {
         "Authorization": f"Bearer {context.bearer_token}",
         "X-Trace-Id": trace_id,
+        "X-Request-Id": request_id,
+        "X-Session-Id": context.session_id,
     }
     if idempotency_key is not None:
         headers["Idempotency-Key"] = idempotency_key
     return headers
 
 
-def _raise_if_error_envelope(envelope: Mapping[str, Any]) -> None:
-    if envelope.get("code") != 0:
-        message = str(envelope.get("message", "Backend API request failed."))
-        raise ValueError(message)
+def parse_api_envelope(raw: Mapping[str, Any]) -> FrontendApiEnvelope:
+    """Parse the Backend API envelope used by the frontend.
+
+    The v2 contract is data/warnings/error/trace_id/request_id. During the
+    migration we also accept the older code/message envelope and normalize it
+    to the same frontend shape.
+    """
+
+    if "error" in raw or "request_id" in raw:
+        return _parse_v2_envelope(raw)
+    return _parse_legacy_envelope(raw)
 
 
-def _data(envelope: Mapping[str, Any]) -> Mapping[str, Any]:
-    return _mapping(envelope.get("data"), field_name="data")
+def _raise_if_error_envelope(envelope: FrontendApiEnvelope) -> None:
+    if envelope.error is not None:
+        raise FrontendApiException(
+            error=envelope.error,
+            trace_id=envelope.trace_id,
+            request_id=envelope.request_id,
+        )
+
+
+def _parse_v2_envelope(raw: Mapping[str, Any]) -> FrontendApiEnvelope:
+    error = _api_error(raw.get("error"))
+    return FrontendApiEnvelope(
+        data=_optional_mapping(raw.get("data"), field_name="data"),
+        warnings=_list(raw.get("warnings", ()), field_name="warnings"),
+        error=error,
+        trace_id=_optional_string(raw.get("trace_id"), field_name="trace_id"),
+        request_id=_string(raw.get("request_id"), field_name="request_id"),
+    )
+
+
+def _parse_legacy_envelope(raw: Mapping[str, Any]) -> FrontendApiEnvelope:
+    trace_id = _optional_string(raw.get("trace_id"), field_name="trace_id")
+    code = raw.get("code")
+    error = None
+    if code != 0:
+        error = FrontendApiError(
+            code=str(code or "INTERNAL_ERROR"),
+            message=str(raw.get("message") or "Backend API request failed."),
+            retryable=False,
+        )
+
+    return FrontendApiEnvelope(
+        data=_optional_mapping(raw.get("data"), field_name="data"),
+        warnings=_list(raw.get("warnings", ()), field_name="warnings"),
+        error=error,
+        trace_id=trace_id,
+        request_id=_optional_string(raw.get("request_id"), field_name="request_id")
+        or _request_id_from_trace_id(trace_id or "frontend"),
+    )
+
+
+def _api_error(value: object) -> FrontendApiError | None:
+    if value is None:
+        return None
+    error = _mapping(value, field_name="error")
+    return FrontendApiError(
+        code=_string(error.get("code"), field_name="error.code"),
+        message=_string(error.get("message"), field_name="error.message"),
+        retryable=_bool(error.get("retryable"), field_name="error.retryable"),
+    )
+
+
+def _data(envelope: FrontendApiEnvelope) -> Mapping[str, Any]:
+    return _mapping(envelope.data, field_name="data")
+
+
+def _optional_mapping(value: object, field_name: str) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+    return _mapping(value, field_name=field_name)
 
 
 def _mapping(value: object, field_name: str) -> Mapping[str, Any]:
@@ -255,6 +423,14 @@ def _optional_string(value: object, field_name: str) -> str | None:
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a string or null")
     return value
+
+
+def _request_id_from_trace_id(trace_id: str) -> str:
+    if trace_id.startswith("trc_"):
+        return f"req_{trace_id.removeprefix('trc_')}"
+    if trace_id.startswith("tr_"):
+        return f"req_{trace_id.removeprefix('tr_')}"
+    return f"req_{trace_id}"
 
 
 def _string(value: object, field_name: str) -> str:

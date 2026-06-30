@@ -50,8 +50,13 @@ def test_revenue_metric_has_canonical_sql_expression() -> None:
     metric = catalog.get_metric("revenue")
 
     assert metric is not None
+    assert metric.metric_id == "revenue"
     assert metric.table_name == "orders"
+    assert metric.formula == "SUM(orders.order_amount) WHERE orders.status = 'paid'"
     assert metric.sql_expression == "SUM(orders.order_amount) WHERE orders.status = 'paid'"
+    assert metric.owner == "analytics"
+    assert metric.status.value == "active"
+    assert metric.semantic_version_id == "sem_v1"
 
 
 def test_catalog_resolves_high_sensitivity_field_alias() -> None:

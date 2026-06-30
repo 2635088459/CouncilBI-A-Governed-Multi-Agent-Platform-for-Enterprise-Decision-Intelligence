@@ -6,8 +6,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
+    "psycopg[binary]>=3.2.0",
     "uvicorn[standard]>=0.30.0",
 ]
+
+[project.scripts]
+chatbi-build-frontend = "chatbi.frontend.build_static:main"
 
 [project.optional-dependencies]
 dev = [

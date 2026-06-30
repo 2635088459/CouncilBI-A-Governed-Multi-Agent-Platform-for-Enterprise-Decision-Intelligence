@@ -15,7 +15,10 @@ from chatbi.core.contracts import (
     QueryHistoryStatus,
     QueryRequest,
     TableResult,
+    TraceLinkedRecord,
+    TraceLinkedRecordType,
     UserRole,
+    build_trace_linked_records,
     ensure_required_answer_fields,
     low_confidence_warning,
     new_trace_id,
@@ -164,3 +167,70 @@ def test_query_history_record_derives_success_status_and_sql_text() -> None:
 
     assert record.status is QueryHistoryStatus.SUCCEEDED
     assert record.sql_text == "SELECT month, revenue FROM revenue_by_month LIMIT 100"
+
+
+def test_trace_linked_record_supports_required_v2_record_types() -> None:
+    trace_id = new_trace_id()
+
+    records = tuple(
+        TraceLinkedRecord(
+            trace_id=trace_id,
+            record_type=record_type,
+            record_id=f"{record_type.value}_001",
+        )
+        for record_type in TraceLinkedRecordType
+    )
+
+    assert tuple(record.record_type.value for record in records) == (
+        "message",
+        "query_result",
+        "agent_trace",
+        "audit_event",
+        "eval_score",
+    )
+    assert all(record.trace_id == trace_id for record in records)
+
+
+def test_trace_linked_record_rejects_missing_trace_or_record_id() -> None:
+    with pytest.raises(ValueError, match="trace_id"):
+        TraceLinkedRecord(
+            trace_id="wrong-prefix",
+            record_type=TraceLinkedRecordType.MESSAGE,
+            record_id="msg_001",
+        )
+
+    with pytest.raises(ValueError, match="record_id"):
+        TraceLinkedRecord(
+            trace_id=new_trace_id(),
+            record_type=TraceLinkedRecordType.MESSAGE,
+            record_id=" ",
+        )
+
+
+def test_build_trace_linked_records_maps_joined_demo_ids_to_contract_records() -> None:
+    trace_id = new_trace_id()
+
+    records = build_trace_linked_records(
+        trace_id=trace_id,
+        message_id="msg_demo_revenue_question",
+        query_result_id="qr_demo_revenue_2026_h1",
+        agent_trace_id="agt_demo_sql_revenue_2026_h1",
+        audit_event_id="aud_demo_revenue_2026_h1",
+        eval_score_id="eval_score_demo_revenue_2026_h1",
+    )
+
+    assert tuple(record.record_type for record in records) == (
+        TraceLinkedRecordType.MESSAGE,
+        TraceLinkedRecordType.QUERY_RESULT,
+        TraceLinkedRecordType.AGENT_TRACE,
+        TraceLinkedRecordType.AUDIT_EVENT,
+        TraceLinkedRecordType.EVAL_SCORE,
+    )
+    assert tuple(record.record_id for record in records) == (
+        "msg_demo_revenue_question",
+        "qr_demo_revenue_2026_h1",
+        "agt_demo_sql_revenue_2026_h1",
+        "aud_demo_revenue_2026_h1",
+        "eval_score_demo_revenue_2026_h1",
+    )
+    assert all(record.trace_id == trace_id for record in records)

@@ -88,6 +88,7 @@ class ApiEnvelope:
     message: str
     data: Mapping[str, Any] | None
     trace_id: str
+    request_id: str
     warnings: tuple[WarningMessage, ...] = ()
     timestamp: str = field(default_factory=utc_now_iso)
 
@@ -272,16 +273,26 @@ def success_envelope(response: ChatQueryResponsePayload) -> ApiEnvelope:
     )
 
 
+def request_id_from_trace_id(trace_id: str) -> str:
+    if trace_id.startswith("trc_"):
+        return f"req_{trace_id.removeprefix('trc_')}"
+    if trace_id.startswith("tr_"):
+        return f"req_{trace_id.removeprefix('tr_')}"
+    return f"req_{trace_id}"
+
+
 def envelope(
     data: Mapping[str, Any] | None,
     trace_id: str,
     warnings: tuple[WarningMessage, ...] = (),
+    request_id: str | None = None,
 ) -> ApiEnvelope:
     return ApiEnvelope(
         code=0,
         message="ok",
         data=data,
         trace_id=trace_id,
+        request_id=request_id or request_id_from_trace_id(trace_id),
         warnings=warnings,
     )
 
@@ -292,12 +303,14 @@ def error_envelope(
     trace_id: str,
     data: Mapping[str, Any] | None = None,
     warnings: tuple[WarningMessage, ...] = (),
+    request_id: str | None = None,
 ) -> ApiEnvelope:
     return ApiEnvelope(
         code=code,
         message=message,
         data=data,
         trace_id=trace_id,
+        request_id=request_id or request_id_from_trace_id(trace_id),
         warnings=warnings,
     )
 
@@ -429,10 +442,15 @@ def metrics_catalog_payload(
             continue
         metrics.append(
             {
+                "id": metric.metric_id,
                 "name": metric.name,
+                "formula": metric.formula,
+                "owner": metric.owner,
+                "status": metric.status,
                 "sql_definition": metric.sql_definition,
                 "source_tables": metric.source_tables,
                 "semantic_version": metric.semantic_version,
+                "semantic_version_id": metric.semantic_version_id,
             }
         )
     return tuple(metrics)

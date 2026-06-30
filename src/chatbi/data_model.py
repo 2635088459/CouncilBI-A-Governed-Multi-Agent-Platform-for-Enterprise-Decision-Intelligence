@@ -64,6 +64,7 @@ class TableDefinition:
     columns: tuple[ColumnDefinition, ...]
     partition_column: str | None = None
     indexes: tuple[tuple[str, ...], ...] = ()
+    unique_constraints: tuple[tuple[str, ...], ...] = ()
     retention_days: int | None = None
     quality_rules: tuple[QualityRuleDefinition, ...] = ()
 
@@ -88,6 +89,20 @@ class MetricDefinition:
     sql_definition: str
     source_tables: tuple[str, ...]
     semantic_version: str
+    owner: str = "analytics"
+    status: str = "active"
+
+    @property
+    def metric_id(self) -> str:
+        return self.name
+
+    @property
+    def formula(self) -> str:
+        return self.sql_definition
+
+    @property
+    def semantic_version_id(self) -> str:
+        return self.semantic_version
 
 
 class DataModelCatalog:
@@ -448,17 +463,66 @@ def _build_knowledge_retrieval_tables() -> tuple[TableDefinition, ...]:
 def _build_runtime_governance_tables() -> tuple[TableDefinition, ...]:
     return (
         TableDefinition(
+            name="sessions",
+            domain=DataDomain.RUNTIME_GOVERNANCE,
+            retention_days=180,
+            columns=(
+                ColumnDefinition("session_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("user_id", "string", nullable=False),
+                ColumnDefinition("title", "text"),
+                ColumnDefinition("created_at", "datetime", nullable=False),
+                ColumnDefinition("updated_at", "datetime", nullable=False),
+            ),
+            indexes=(("user_id", "created_at"),),
+            quality_rules=(_retention_rule(180),),
+        ),
+        TableDefinition(
+            name="messages",
+            domain=DataDomain.RUNTIME_GOVERNANCE,
+            retention_days=180,
+            columns=(
+                ColumnDefinition("message_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("session_id", "string", nullable=False, foreign_key="sessions.session_id"),
+                ColumnDefinition("trace_id", "string", nullable=False),
+                ColumnDefinition("role", "string", nullable=False),
+                ColumnDefinition("content", "text", nullable=False),
+                ColumnDefinition("created_at", "datetime", nullable=False),
+            ),
+            indexes=(("session_id", "created_at"), ("trace_id",)),
+            quality_rules=(_retention_rule(180),),
+        ),
+        TableDefinition(
+            name="query_results",
+            domain=DataDomain.RUNTIME_GOVERNANCE,
+            retention_days=180,
+            columns=(
+                ColumnDefinition("query_result_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("trace_id", "string", nullable=False),
+                ColumnDefinition("message_id", "string", nullable=False, foreign_key="messages.message_id"),
+                ColumnDefinition("sql_hash", "string", nullable=False),
+                ColumnDefinition("table_result", "json", nullable=False),
+                ColumnDefinition("chart_spec", "json"),
+                ColumnDefinition("created_at", "datetime", nullable=False),
+            ),
+            indexes=(("trace_id",), ("message_id",), ("sql_hash",)),
+            unique_constraints=(("trace_id",),),
+            quality_rules=(_retention_rule(180),),
+        ),
+        TableDefinition(
             name="query_history",
             domain=DataDomain.RUNTIME_GOVERNANCE,
             retention_days=180,
             columns=(
                 ColumnDefinition("trace_id", "string", nullable=False, is_primary_key=True),
-                ColumnDefinition("user_id", "string", nullable=False),
+                ColumnDefinition("session_id", "string", nullable=False, foreign_key="sessions.session_id"),
+                ColumnDefinition("message_id", "string", nullable=False, foreign_key="messages.message_id"),
+                ColumnDefinition("status", "string", nullable=False),
                 ColumnDefinition("question", "text", nullable=False),
                 ColumnDefinition("sql_text", "text"),
-                ColumnDefinition("status", "string", nullable=False),
+                ColumnDefinition("final_answer", "json"),
                 ColumnDefinition("created_at", "datetime", nullable=False),
             ),
+            indexes=(("session_id", "created_at"), ("status", "created_at")),
             quality_rules=(_retention_rule(180),),
         ),
         TableDefinition(
@@ -475,17 +539,58 @@ def _build_runtime_governance_tables() -> tuple[TableDefinition, ...]:
             quality_rules=(_retention_rule(180),),
         ),
         TableDefinition(
+            name="query_audit_events",
+            domain=DataDomain.RUNTIME_GOVERNANCE,
+            retention_days=180,
+            columns=(
+                ColumnDefinition("audit_event_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("trace_id", "string", nullable=False, foreign_key="query_history.trace_id"),
+                ColumnDefinition("user_id", "string", nullable=False),
+                ColumnDefinition("role", "string", nullable=False),
+                ColumnDefinition("sql_hash", "string", nullable=False),
+                ColumnDefinition("decision", "string", nullable=False),
+                ColumnDefinition("latency_ms", "integer", nullable=False),
+                ColumnDefinition("created_at", "datetime", nullable=False),
+            ),
+            indexes=(("trace_id",), ("sql_hash",), ("decision",)),
+            quality_rules=(_retention_rule(180),),
+        ),
+        TableDefinition(
+            name="sql_rule_hits",
+            domain=DataDomain.RUNTIME_GOVERNANCE,
+            retention_days=180,
+            columns=(
+                ColumnDefinition("rule_hit_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition(
+                    "audit_event_id",
+                    "string",
+                    nullable=False,
+                    foreign_key="query_audit_events.audit_event_id",
+                ),
+                ColumnDefinition("trace_id", "string", nullable=False, foreign_key="query_history.trace_id"),
+                ColumnDefinition("rule_code", "string", nullable=False),
+                ColumnDefinition("object_name", "string"),
+                ColumnDefinition("message", "text", nullable=False),
+                ColumnDefinition("created_at", "datetime", nullable=False),
+            ),
+            indexes=(("audit_event_id",), ("trace_id",), ("rule_code",)),
+            quality_rules=(_retention_rule(180),),
+        ),
+        TableDefinition(
             name="agent_traces",
             domain=DataDomain.RUNTIME_GOVERNANCE,
             columns=(
                 ColumnDefinition("agent_trace_id", "string", nullable=False, is_primary_key=True),
                 ColumnDefinition("trace_id", "string", nullable=False, foreign_key="query_history.trace_id"),
+                ColumnDefinition("query_result_id", "string", foreign_key="query_results.query_result_id"),
                 ColumnDefinition("agent_name", "string", nullable=False),
                 ColumnDefinition("status", "string", nullable=False),
                 ColumnDefinition("input_summary", "text"),
                 ColumnDefinition("output_summary", "text"),
+                ColumnDefinition("latency_ms", "integer"),
                 ColumnDefinition("created_at", "datetime", nullable=False),
             ),
+            indexes=(("trace_id",), ("query_result_id",), ("agent_name", "status")),
         ),
         TableDefinition(
             name="eval_runs",

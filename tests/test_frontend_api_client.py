@@ -3,7 +3,12 @@ from typing import Any, Mapping
 import pytest
 
 from chatbi.core.contracts import Locale, UserRole
-from chatbi.frontend.api_client import FrontendApiClient, FrontendUserContext
+from chatbi.frontend.api_client import (
+    FrontendApiClient,
+    FrontendUserContext,
+    parse_api_envelope,
+)
+from chatbi.frontend.observability import FrontendEventName, FrontendLogger
 
 
 class FakeTransport:
@@ -57,6 +62,22 @@ class FakeTransport:
                 "timestamp": "2026-06-18T12:00:00Z",
                 "data": {"metrics": [{"name": "revenue"}]},
             }
+        if path.startswith("/api/v1/chat/tasks/"):
+            return {
+                "data": {
+                    "task_id": path.rsplit("/", 1)[-1],
+                    "trace_id": "trc_task",
+                    "kind": "indexing",
+                    "status": "succeeded",
+                    "payload": {"document_id": "doc_001"},
+                    "result": {"document_id": "doc_001", "chunk_count": 2},
+                    "error_message": None,
+                },
+                "warnings": [],
+                "error": None,
+                "trace_id": headers["X-Trace-Id"],
+                "request_id": headers["X-Request-Id"],
+            }
         return {
             "code": 0,
             "message": "ok",
@@ -69,7 +90,8 @@ class FakeTransport:
 
 def test_submit_question_calls_backend_chat_query() -> None:
     transport = FakeTransport()
-    client = FrontendApiClient(transport)
+    logger = FrontendLogger()
+    client = FrontendApiClient(transport, logger=logger)
 
     view_model = client.submit_question(
         context=_context(),
@@ -81,10 +103,65 @@ def test_submit_question_calls_backend_chat_query() -> None:
     assert transport.last_headers is not None
     assert transport.last_headers["Authorization"] == "Bearer test-token"
     assert transport.last_headers["X-Trace-Id"].startswith("trc_")
+    assert transport.last_headers["X-Request-Id"].startswith("req_")
+    assert transport.last_headers["X-Session-Id"] == "s_001"
     assert transport.last_headers["Idempotency-Key"] == "idem_frontend_001"
     assert transport.last_body is not None
     assert transport.last_body["locale"] == "en"
     assert view_model.answer.text == "Revenue trend is ready."
+    records = logger.store.list_all()
+    assert len(records) == 2
+    assert records[0].event is FrontendEventName.QUERY_SUBMITTED
+    assert records[0].request_id == transport.last_headers["X-Request-Id"]
+    assert records[0].session_id == "s_001"
+    assert records[0].trace_id == transport.last_headers["X-Trace-Id"]
+    assert records[1].event is FrontendEventName.API_REQUEST_COMPLETED
+    assert records[1].request_id == transport.last_headers["X-Request-Id"]
+    assert records[1].session_id == "s_001"
+    assert records[1].trace_id == transport.last_headers["X-Trace-Id"]
+    assert records[1].route == "/api/v1/chat/query"
+    assert records[1].duration_ms is not None
+    assert records[1].duration_ms >= 0
+    assert records[1].status == "succeeded"
+
+
+def test_parse_api_envelope_accepts_v2_success_shape() -> None:
+    envelope = parse_api_envelope(
+        {
+            "data": {"answer_text": "ok"},
+            "warnings": [{"code": "AGENT_PARTIAL_FAILURE", "message": "RAG skipped."}],
+            "error": None,
+            "trace_id": "tr_12345678",
+            "request_id": "req_12345678",
+        }
+    )
+
+    assert envelope.data == {"answer_text": "ok"}
+    assert envelope.error is None
+    assert envelope.trace_id == "tr_12345678"
+    assert envelope.request_id == "req_12345678"
+    assert envelope.warnings[0]["code"] == "AGENT_PARTIAL_FAILURE"
+
+
+def test_parse_api_envelope_accepts_v2_error_shape() -> None:
+    envelope = parse_api_envelope(
+        {
+            "data": None,
+            "warnings": [],
+            "error": {
+                "code": "SQL_GUARDRAIL_DENIED",
+                "message": "Only read-only SELECT queries are allowed.",
+                "retryable": False,
+            },
+            "trace_id": "tr_12345678",
+            "request_id": "req_12345678",
+        }
+    )
+
+    assert envelope.error is not None
+    assert envelope.error.code == "SQL_GUARDRAIL_DENIED"
+    assert envelope.error.message == "Only read-only SELECT queries are allowed."
+    assert envelope.error.retryable is False
 
 
 def test_load_history_returns_history_view_model() -> None:
@@ -114,6 +191,21 @@ def test_load_metric_catalog_returns_metric_view_model() -> None:
     catalog = client.load_metric_catalog(context=_context())
 
     assert catalog.metrics[0]["name"] == "revenue"
+
+
+def test_load_task_status_calls_backend_task_endpoint() -> None:
+    transport = FakeTransport()
+    client = FrontendApiClient(transport)
+
+    status = client.load_task_status(context=_context(), task_id="task_001")
+
+    assert transport.last_path == "/api/v1/chat/tasks/task_001"
+    assert transport.last_query == {"user_id": "u_001"}
+    assert status.task_id == "task_001"
+    assert status.trace_id == "trc_task"
+    assert status.status.value == "completed"
+    assert status.label == "Completed"
+    assert status.result["chunk_count"] == 2
 
 
 def test_run_evaluation_calls_backend_eval_run() -> None:
@@ -188,10 +280,16 @@ def test_submit_question_raises_on_error_envelope() -> None:
                 "timestamp": "2026-06-18T12:00:00Z",
             }
 
-    client = FrontendApiClient(ErrorTransport())
+    logger = FrontendLogger()
+    client = FrontendApiClient(ErrorTransport(), logger=logger)
 
     with pytest.raises(ValueError, match="Missing token"):
         client.submit_question(context=_context(), question="Show revenue.")
+
+    records = logger.store.list_all()
+    assert records[1].event is FrontendEventName.API_REQUEST_COMPLETED
+    assert records[1].status == "failed"
+    assert records[1].error_code == "AUTH_UNAUTHORIZED"
 
 
 def _context() -> FrontendUserContext:

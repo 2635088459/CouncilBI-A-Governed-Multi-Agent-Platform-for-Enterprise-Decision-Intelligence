@@ -91,3 +91,24 @@ def test_observability_log_store_lists_records_by_trace_id() -> None:
     assert len(records) == 1
     assert records[0].trace_id == "trc_one"
     assert len(store.list_all()) == 2
+
+
+def test_observability_logger_supports_v2_required_structured_fields() -> None:
+    logger = ObservabilityLogger()
+
+    record = logger.record(
+        trace_id="tr_12345678",
+        level=LogLevel.INFO,
+        message="Accepted v2 chat query.",
+        endpoint="/api/v2/chat/query",
+        user_id="u_001",
+        service="chatbi-api",
+        event="chat_query_accepted",
+        request_id="req_12345678",
+    )
+
+    assert record.trace_id == "tr_12345678"
+    assert record.request_id == "req_12345678"
+    assert record.service == "chatbi-api"
+    assert record.event == "chat_query_accepted"
+    assert record.level is LogLevel.INFO

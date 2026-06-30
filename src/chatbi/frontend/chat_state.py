@@ -7,11 +7,18 @@ user turn in, loading state on, answer card out.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
-from chatbi.frontend.api_client import FrontendUserContext
+from chatbi.frontend.api_client import FrontendApiException, FrontendUserContext
+from chatbi.frontend.ui_answer_state import (
+    UiAnswerState,
+    answer_state_from_result,
+    failed_answer_state,
+    idle_answer_state,
+    submitting_answer_state,
+)
 from chatbi.frontend.view_models import (
     MessageBubbleViewModel,
     MessageRole,
@@ -40,6 +47,7 @@ class ChatPageState:
     turns: tuple[ChatTurnViewModel, ...] = ()
     is_loading: bool = False
     error_message: str | None = None
+    answer_state: UiAnswerState = field(default_factory=idle_answer_state)
 
     @property
     def can_submit(self) -> bool:
@@ -92,20 +100,9 @@ class ChatSessionStore:
     ) -> ChatPageState:
         """Add a user question and attach the backend answer when it returns."""
 
-        normalized_question = _normalize_question(question)
-        pending_turn = ChatTurnViewModel(
-            question=MessageBubbleViewModel(
-                role=MessageRole.USER,
-                text=normalized_question,
-            ),
-            status=ChatTurnStatus.SUBMITTED,
-        )
-        self._state = replace(
-            self._state,
-            turns=(*self._state.turns, pending_turn),
-            is_loading=True,
-            error_message=None,
-        )
+        self.start_question_submission(question)
+        pending_turn = self._state.turns[-1]
+        normalized_question = pending_turn.question.text
 
         try:
             result = self._api_client.submit_question(
@@ -113,6 +110,24 @@ class ChatSessionStore:
                 question=normalized_question,
                 idempotency_key=idempotency_key,
             )
+        except FrontendApiException as exc:
+            failed_turn = replace(
+                pending_turn,
+                status=ChatTurnStatus.FAILED,
+                error_message=str(exc),
+            )
+            self._state = replace(
+                self._state,
+                turns=(*self._state.turns[:-1], failed_turn),
+                is_loading=False,
+                error_message=str(exc),
+                answer_state=failed_answer_state(
+                    error_code=exc.error.code,
+                    message=exc.error.message,
+                    trace_id=exc.trace_id,
+                ),
+            )
+            return self._state
         except ValueError as exc:
             failed_turn = replace(
                 pending_turn,
@@ -124,6 +139,10 @@ class ChatSessionStore:
                 turns=(*self._state.turns[:-1], failed_turn),
                 is_loading=False,
                 error_message=str(exc),
+                answer_state=failed_answer_state(
+                    error_code="INTERNAL_ERROR",
+                    message=str(exc),
+                ),
             )
             return self._state
 
@@ -137,6 +156,27 @@ class ChatSessionStore:
             turns=(*self._state.turns[:-1], answered_turn),
             is_loading=False,
             error_message=None,
+            answer_state=answer_state_from_result(result),
+        )
+        return self._state
+
+    def start_question_submission(self, question: str) -> ChatPageState:
+        """Move the page into loading state immediately after the user clicks send."""
+
+        normalized_question = _normalize_question(question)
+        pending_turn = ChatTurnViewModel(
+            question=MessageBubbleViewModel(
+                role=MessageRole.USER,
+                text=normalized_question,
+            ),
+            status=ChatTurnStatus.SUBMITTED,
+        )
+        self._state = replace(
+            self._state,
+            turns=(*self._state.turns, pending_turn),
+            is_loading=True,
+            error_message=None,
+            answer_state=submitting_answer_state(),
         )
         return self._state
 
@@ -144,18 +184,40 @@ class ChatSessionStore:
         """Append a replayed historical answer to the current conversation."""
 
         normalized_question = _normalize_question(question)
-        self._state = replace(self._state, is_loading=True, error_message=None)
+        self._state = replace(
+            self._state,
+            is_loading=True,
+            error_message=None,
+            answer_state=submitting_answer_state(),
+        )
 
         try:
             result = self._api_client.replay_query(
                 context=self._state.context,
                 trace_id=trace_id,
             )
+        except FrontendApiException as exc:
+            self._state = replace(
+                self._state,
+                is_loading=False,
+                error_message=str(exc),
+                answer_state=failed_answer_state(
+                    error_code=exc.error.code,
+                    message=exc.error.message,
+                    trace_id=exc.trace_id or trace_id,
+                ),
+            )
+            return self._state
         except ValueError as exc:
             self._state = replace(
                 self._state,
                 is_loading=False,
                 error_message=str(exc),
+                answer_state=failed_answer_state(
+                    error_code="INTERNAL_ERROR",
+                    message=str(exc),
+                    trace_id=trace_id,
+                ),
             )
             return self._state
 
@@ -173,6 +235,7 @@ class ChatSessionStore:
             turns=(*self._state.turns, replayed_turn),
             is_loading=False,
             error_message=None,
+            answer_state=answer_state_from_result(result),
         )
         return self._state
 

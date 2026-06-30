@@ -12,6 +12,11 @@ class SensitivityLevel(StrEnum):
     HIGH = "high"
 
 
+class MetricStatus(StrEnum):
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
+
+
 @dataclass(frozen=True, slots=True)
 class MetricDefinition:
     name: str
@@ -20,6 +25,33 @@ class MetricDefinition:
     sql_expression: str
     semantic_version: str
     synonyms: tuple[str, ...] = ()
+    owner: str = "analytics"
+    status: MetricStatus = MetricStatus.ACTIVE
+
+    def __post_init__(self) -> None:
+        required_values = {
+            "name": self.name,
+            "description": self.description,
+            "table_name": self.table_name,
+            "sql_expression": self.sql_expression,
+            "semantic_version": self.semantic_version,
+            "owner": self.owner,
+        }
+        for field_name, value in required_values.items():
+            if not value.strip():
+                raise ValueError(f"{field_name} is required")
+
+    @property
+    def metric_id(self) -> str:
+        return self.name
+
+    @property
+    def formula(self) -> str:
+        return self.sql_expression
+
+    @property
+    def semantic_version_id(self) -> str:
+        return self.semantic_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +67,14 @@ class FieldDefinition:
     @property
     def is_high_sensitivity(self) -> bool:
         return self.sensitivity is SensitivityLevel.HIGH
+
+    @property
+    def field_id(self) -> str:
+        return self.name
+
+    @property
+    def semantic_version_id(self) -> str:
+        return self.semantic_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +183,8 @@ class SemanticCatalog:
             or existing_metric.table_name != updated_metric.table_name
             or existing_metric.sql_expression != updated_metric.sql_expression
             or existing_metric.synonyms != updated_metric.synonyms
+            or existing_metric.owner != updated_metric.owner
+            or existing_metric.status != updated_metric.status
         )
 
 

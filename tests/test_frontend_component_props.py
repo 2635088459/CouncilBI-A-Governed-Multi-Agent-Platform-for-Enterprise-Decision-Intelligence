@@ -6,6 +6,11 @@ from chatbi.frontend.component_props import (
     build_chat_page_props,
     should_submit_chat_input,
 )
+from chatbi.frontend.ui_answer_state import (
+    UiAnswerStatus,
+    answer_state_from_result,
+    failed_answer_state,
+)
 from chatbi.frontend.view_models import (
     AnalyticsCardViewModel,
     ChartCardViewModel,
@@ -29,6 +34,9 @@ def test_build_chat_page_props_returns_localized_empty_state() -> None:
     assert props.input.placeholder == "请输入一个业务问题..."
     assert props.input.send_label == "发送"
     assert props.input.can_submit is True
+    assert props.answer_state.status is UiAnswerStatus.IDLE
+    assert props.trace is None
+    assert props.error_boundary is None
     assert props.turns == ()
     assert props.tab_order == (
         ComponentId.CHAT_INPUT,
@@ -54,6 +62,8 @@ def test_build_chat_page_props_includes_result_blocks_and_accessibility_labels()
 
     props = build_chat_page_props(state, Locale.EN)
 
+    assert props.answer_state.status is UiAnswerStatus.IDLE
+    assert props.trace is None
     assert props.turns[0].question_text == "Show revenue trend."
     assert props.turns[0].result is not None
     assert props.turns[0].result.confidence_label == "Confidence: 91%"
@@ -145,6 +155,136 @@ def test_build_chat_page_props_disables_submit_while_loading() -> None:
     assert props.is_loading is True
     assert props.input.can_submit is False
     assert props.input.loading_label == "Analyzing your question..."
+
+
+def test_build_chat_page_props_exposes_standard_answer_state() -> None:
+    result = _result()
+    state = ChatPageState(
+        context=_context(),
+        turns=(
+            ChatTurnViewModel(
+                question=MessageBubbleViewModel(
+                    role=MessageRole.USER,
+                    text="Show revenue trend.",
+                ),
+                status=ChatTurnStatus.ANSWERED,
+                result=result,
+            ),
+        ),
+        answer_state=answer_state_from_result(result),
+    )
+
+    props = build_chat_page_props(state, Locale.EN)
+
+    assert props.answer_state.status is UiAnswerStatus.PARTIAL
+    assert props.answer_state.trace_id == "trc_result"
+    assert props.answer_state.answer_text == "Revenue trend is ready."
+    assert props.answer_state.table_result is not None
+    assert props.answer_state.chart_spec is not None
+    assert props.answer_state.warnings[0]["code"] == "AGENT_PARTIAL_FAILURE"
+    assert props.trace is not None
+    assert props.trace.trace_id == "trc_result"
+    assert props.trace.label == "Trace ID: trc_result"
+    assert props.trace.copy_label == "Copy trace ID"
+    assert props.trace.copy_value == "trc_result"
+    assert props.trace.copyable is True
+    assert props.tab_order == (
+        ComponentId.CHAT_INPUT,
+        ComponentId.CHAT_SEND,
+        ComponentId.MESSAGE_LIST,
+        ComponentId.RESULT_CARD,
+        ComponentId.TRACE_ID,
+        ComponentId.TRACE_COPY,
+        ComponentId.SQL_EXPLAIN,
+    )
+
+
+def test_build_chat_page_props_localizes_trace_id_copy_props() -> None:
+    result = _result()
+    state = ChatPageState(
+        context=_context(locale=Locale.ZH_CN),
+        turns=(
+            ChatTurnViewModel(
+                question=MessageBubbleViewModel(
+                    role=MessageRole.USER,
+                    text="显示收入趋势。",
+                ),
+                status=ChatTurnStatus.ANSWERED,
+                result=result,
+            ),
+        ),
+        answer_state=answer_state_from_result(result),
+    )
+
+    props = build_chat_page_props(state, Locale.ZH_CN)
+
+    assert props.trace is not None
+    assert props.trace.label == "追踪 ID：trc_result"
+    assert props.trace.copy_label == "复制追踪 ID"
+
+
+def test_build_chat_page_props_renders_sql_guardrail_error_boundary() -> None:
+    state = ChatPageState(
+        context=_context(),
+        answer_state=failed_answer_state(
+            error_code="SQL_GUARDRAIL_DENIED",
+            message="Only read-only SELECT queries are allowed.",
+            trace_id="trc_denied",
+        ),
+    )
+
+    props = build_chat_page_props(state, Locale.EN)
+
+    assert props.error_boundary is not None
+    assert props.error_boundary.code == "SQL_GUARDRAIL_DENIED"
+    assert props.error_boundary.title == "Query blocked for safety"
+    assert props.error_boundary.message == (
+        "Only safe read-only analytics are allowed. Ask for a narrower business metric or time range."
+    )
+    assert props.error_boundary.retry_label == "Try again"
+    assert props.error_boundary.retryable is True
+    assert props.trace is not None
+    assert props.trace.copy_value == "trc_denied"
+    assert props.tab_order == (
+        ComponentId.CHAT_INPUT,
+        ComponentId.CHAT_SEND,
+        ComponentId.MESSAGE_LIST,
+        ComponentId.ERROR_BOUNDARY,
+    )
+
+
+def test_build_chat_page_props_renders_validation_error_boundary() -> None:
+    state = ChatPageState(
+        context=_context(),
+        answer_state=failed_answer_state(
+            error_code="VALIDATION_ERROR",
+            message="Question is required.",
+        ),
+    )
+
+    props = build_chat_page_props(state, Locale.EN)
+
+    assert props.error_boundary is not None
+    assert props.error_boundary.title == "Check your question"
+    assert props.error_boundary.message == (
+        "The request is missing required information. Rephrase the question and try again."
+    )
+
+
+def test_build_chat_page_props_localizes_internal_error_boundary() -> None:
+    state = ChatPageState(
+        context=_context(locale=Locale.ZH_CN),
+        answer_state=failed_answer_state(
+            error_code="INTERNAL_ERROR",
+            message="Backend API request failed.",
+        ),
+    )
+
+    props = build_chat_page_props(state, Locale.ZH_CN)
+
+    assert props.error_boundary is not None
+    assert props.error_boundary.title == "系统暂时无法完成请求"
+    assert props.error_boundary.retry_label == "重试"
 
 
 def test_should_submit_chat_input_supports_keyboard_submission() -> None:

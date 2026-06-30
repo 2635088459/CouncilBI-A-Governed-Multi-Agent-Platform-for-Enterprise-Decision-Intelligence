@@ -8,6 +8,7 @@ from chatbi.frontend.api_client import (
 from chatbi.frontend.app_shell import FrontendAppShell, FrontendRoute
 from chatbi.frontend.chat_state import ChatTurnStatus
 from chatbi.frontend.evaluation_state import ReleaseGateStatus
+from chatbi.frontend.task_status_state import TaskStatusViewModel, UiTaskStatus
 from chatbi.frontend.view_models import (
     ChartCardViewModel,
     MessageBubbleViewModel,
@@ -22,6 +23,7 @@ class FakeFrontendAppApiClient:
     def __init__(self) -> None:
         self.submitted_questions: list[str] = []
         self.replayed_trace_ids: list[str] = []
+        self.loaded_task_ids: list[str] = []
 
     def submit_question(
         self,
@@ -72,6 +74,22 @@ class FakeFrontendAppApiClient:
             )
         )
 
+    def load_task_status(
+        self,
+        context: FrontendUserContext,
+        task_id: str,
+    ) -> TaskStatusViewModel:
+        self.loaded_task_ids.append(task_id)
+        return TaskStatusViewModel(
+            task_id=task_id,
+            trace_id="trc_task",
+            kind="indexing",
+            status=UiTaskStatus.COMPLETED,
+            label="Completed",
+            result={"document_id": "doc_001", "chunk_count": 2},
+            error_message=None,
+        )
+
     def run_evaluation(
         self,
         context: FrontendUserContext,
@@ -98,8 +116,11 @@ def test_app_shell_submits_chat_question_and_builds_chat_props() -> None:
 
     state = shell.submit_chat_question("Show revenue trend.")
     props = shell.chat_props()
+    shell_props = shell.shell_props()
 
     assert state.route is FrontendRoute.CHAT
+    assert shell_props.active_route is FrontendRoute.CHAT
+    assert shell_props.nav_items[0].is_active is True
     assert state.chat.turns[0].status is ChatTurnStatus.ANSWERED
     assert api_client.submitted_questions == ["Show revenue trend."]
     assert props.turns[0].result is not None
@@ -111,10 +132,14 @@ def test_app_shell_loads_history_selects_and_replays_into_chat() -> None:
     shell = FrontendAppShell(context=_context(), api_client=api_client)
 
     history_state = shell.load_history()
+    history_props = shell.history_props()
     selected_state = shell.select_history_for_replay("trc_history")
     replay_state = shell.replay_selected_history()
 
     assert history_state.route is FrontendRoute.HISTORY
+    assert history_props.items[0].trace_id == "trc_history"
+    assert history_props.items[0].can_replay is True
+    assert history_props.items[0].replay_label == "Replay"
     assert selected_state.history.selected_replay is not None
     assert replay_state.route is FrontendRoute.CHAT
     assert replay_state.history.selected_replay is None
@@ -132,11 +157,15 @@ def test_app_shell_loads_and_searches_catalog() -> None:
 
     loaded_state = shell.load_catalog()
     searched_state = shell.search_catalog("revenue")
+    props = shell.catalog_props()
 
     assert loaded_state.route is FrontendRoute.CATALOG
     assert loaded_state.catalog.selected_metric is not None
     assert loaded_state.catalog.selected_metric.name == "revenue"
     assert [metric.name for metric in searched_state.catalog.filtered_metrics] == ["revenue"]
+    assert props.metrics[0].name == "revenue"
+    assert props.selected_metric is not None
+    assert props.selected_metric.name == "revenue"
 
 
 def test_app_shell_runs_evaluation_suite() -> None:
@@ -149,11 +178,33 @@ def test_app_shell_runs_evaluation_suite() -> None:
         eval_suite_id="frontend_smoke",
         questions=("Show revenue trend.",),
     )
+    props = shell.evaluation_props()
 
     assert state.route is FrontendRoute.EVALUATION
     assert state.evaluation.latest_report is not None
     assert state.evaluation.latest_report.eval_suite_id == "frontend_smoke"
     assert state.evaluation.release_gate_status is ReleaseGateStatus.PASSED
+    assert props.report is not None
+    assert props.report.gate_label == "Release gate passed"
+    assert props.report.tone == "success"
+
+
+def test_app_shell_loads_task_status_page() -> None:
+    api_client = FakeFrontendAppApiClient()
+    shell = FrontendAppShell(context=_context(), api_client=api_client)
+
+    state = shell.load_task_status("task_001")
+    refreshed_state = shell.refresh_current_task_status()
+    props = shell.task_status_props()
+
+    assert state.route is FrontendRoute.TASK_STATUS
+    assert state.task_status.current_status is not None
+    assert state.task_status.current_status.status is UiTaskStatus.COMPLETED
+    assert refreshed_state.route is FrontendRoute.TASK_STATUS
+    assert props.status_card is not None
+    assert props.status_card.task_id == "task_001"
+    assert props.status_card.tone == "success"
+    assert api_client.loaded_task_ids == ["task_001", "task_001"]
 
 
 def test_app_shell_noops_replay_when_no_history_selection_exists() -> None:

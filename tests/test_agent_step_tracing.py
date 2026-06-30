@@ -1,7 +1,21 @@
 import pytest
 
-from chatbi.core.contracts import AgentName, AgentStepStatus, new_trace_id
+from chatbi.core.contracts import AgentName, AgentStepStatus, AgentTraceEvent, new_trace_id
 from chatbi.orchestration.tracing import AgentStepTracer, InMemoryAgentTraceLog
+
+
+class RecordingTraceRepository:
+    def __init__(self) -> None:
+        self.events: list[AgentTraceEvent] = []
+
+    def add(self, event: AgentTraceEvent) -> None:
+        self.events.append(event)
+
+    def list_by_trace_id(self, trace_id: str) -> tuple[AgentTraceEvent, ...]:
+        return tuple(event for event in self.events if event.trace_id == trace_id)
+
+    def list_all(self) -> tuple[AgentTraceEvent, ...]:
+        return tuple(self.events)
 
 
 def test_tracer_records_start_and_success_events() -> None:
@@ -51,6 +65,29 @@ def test_tracer_records_start_and_failure_events() -> None:
     assert events[1].duration_ms is not None
 
 
+def test_tracer_records_timeout_error_code_in_summary() -> None:
+    trace_id = new_trace_id()
+    trace_log = InMemoryAgentTraceLog()
+    tracer = AgentStepTracer(trace_log)
+
+    def time_out() -> str:
+        raise TimeoutError("agent timed out")
+
+    with pytest.raises(TimeoutError, match="agent timed out"):
+        tracer.run_step(
+            trace_id=trace_id,
+            agent_name=AgentName.SQL,
+            action=time_out,
+        )
+
+    events = trace_log.list_by_trace_id(trace_id)
+
+    assert len(events) == 2
+    assert events[0].status is AgentStepStatus.STARTED
+    assert events[1].status is AgentStepStatus.TIMED_OUT
+    assert events[1].summary == "AGENT_TIMEOUT"
+
+
 def test_tracer_records_skipped_agent_step() -> None:
     trace_id = new_trace_id()
     trace_log = InMemoryAgentTraceLog()
@@ -92,3 +129,22 @@ def test_trace_log_lists_all_agent_trace_events() -> None:
     assert len(events) == 2
     assert events[0].trace_id == first_trace_id
     assert events[1].trace_id == second_trace_id
+
+
+def test_tracer_writes_through_trace_repository_contract() -> None:
+    trace_id = new_trace_id()
+    repository = RecordingTraceRepository()
+    tracer = AgentStepTracer(repository)
+
+    tracer.run_step(
+        trace_id=trace_id,
+        agent_name=AgentName.SQL,
+        action=lambda: "ok",
+    )
+
+    events = repository.list_by_trace_id(trace_id)
+
+    assert tuple(event.status for event in events) == (
+        AgentStepStatus.STARTED,
+        AgentStepStatus.SUCCEEDED,
+    )

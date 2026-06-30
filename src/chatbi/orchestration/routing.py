@@ -7,26 +7,25 @@ from enum import StrEnum
 
 from chatbi.core.contracts import AgentName
 
-# The TaskType support the following questions and tasks:
-class TaskType(StrEnum):
-    # KPI_QUERY supports questions like "What were the total sales last month?" or "Compare revenue between product A and B."
-    KPI_QUERY = "kpi_query"
-    # FORECAST supports questions like "What will be the sales next month?" or "Predict revenue for the next quarter."
-    FORECAST = "forecast"
-    # WHY_EXPLANATION supports questions like "Why did sales drop last month?" or "Explain the reason for the revenue decline."
-    WHY_EXPLANATION = "why_explanation"
-    # ANOMALY_DETECTION supports questions like "Detect any anomalies in sales data." or "Find outliers in revenue trends."
-    ANOMALY_DETECTION = "anomaly_detection"
-    # GENERAL_ANALYSIS supports questions that do not fit into the other categories.
-    GENERAL_ANALYSIS = "general_analysis"
 
-# The ExecutionStage defines the order of agent execution, ensuring SQL agents run before fanout agents, and verifiers run last.
+class TaskType(StrEnum):
+    """V2 task types from spec/version2/02-agent-orchestration.spec.md."""
+
+    SQL_QUERY = "sql_query"
+    CHART = "chart"
+    ANALYTICS = "analytics"
+    RAG_EXPLANATION = "rag_explanation"
+    VERIFICATION = "verification"
+
+
 class ExecutionStage(StrEnum):
+    """Coarse execution phases used to keep the plan easy to reason about."""
+
     SQL = "sql"
     FANOUT = "fanout"
     VERIFY = "verify"
 
-# 
+
 @dataclass(frozen=True, slots=True)
 class AgentPlanStep:
     agent_name: AgentName
@@ -49,15 +48,23 @@ class QuestionClassifier:
     def classify(self, question: str) -> TaskType:
         normalized = question.strip().lower()
 
-        if self._contains_any(normalized, ("forecast", "predict", "prediction", "next month", "next 30 days")):
-            return TaskType.FORECAST
         if self._contains_any(normalized, ("why", "reason", "cause", "explain")):
-            return TaskType.WHY_EXPLANATION
-        if self._contains_any(normalized, ("anomaly", "abnormal", "outlier", "spike", "drop")):
-            return TaskType.ANOMALY_DETECTION
-        if self._contains_any(normalized, ("revenue", "orders", "refund", "active users", "trend", "compare")):
-            return TaskType.KPI_QUERY
-        return TaskType.GENERAL_ANALYSIS
+            return TaskType.RAG_EXPLANATION
+        if self._contains_any(normalized, ("verify", "validate", "check answer", "audit")):
+            return TaskType.VERIFICATION
+        if self._contains_any(
+            normalized,
+            ("forecast", "predict", "prediction", "next month", "next 30 days", "anomaly", "abnormal", "outlier", "spike"),
+        ):
+            return TaskType.ANALYTICS
+        if self._contains_any(normalized, ("chart", "plot", "visualize", "trend", "graph")):
+            return TaskType.CHART
+        if self._contains_any(normalized, ("revenue", "orders", "refund", "active users", "compare", "total", "count")):
+            return TaskType.SQL_QUERY
+        return TaskType.SQL_QUERY
+
+    def classify_many(self, questions: tuple[str, ...]) -> tuple[TaskType, ...]:
+        return tuple(self.classify(question) for question in questions)
 
     def _contains_any(self, text: str, keywords: tuple[str, ...]) -> bool:
         return any(keyword in text for keyword in keywords)
@@ -81,7 +88,7 @@ class ExecutionPlanBuilder:
         )
 
     def _fanout_steps(self, task_type: TaskType) -> tuple[AgentPlanStep, ...]:
-        if task_type is TaskType.KPI_QUERY:
+        if task_type is TaskType.CHART:
             return (
                 AgentPlanStep(
                     agent_name=AgentName.VISUALIZATION,
@@ -89,7 +96,7 @@ class ExecutionPlanBuilder:
                     depends_on=(AgentName.SQL,),
                 ),
             )
-        if task_type is TaskType.FORECAST:
+        if task_type is TaskType.ANALYTICS:
             return (
                 AgentPlanStep(
                     agent_name=AgentName.ANALYTICS,
@@ -97,18 +104,10 @@ class ExecutionPlanBuilder:
                     depends_on=(AgentName.SQL,),
                 ),
             )
-        if task_type is TaskType.WHY_EXPLANATION:
+        if task_type is TaskType.RAG_EXPLANATION:
             return (
                 AgentPlanStep(
                     agent_name=AgentName.RAG,
-                    stage=ExecutionStage.FANOUT,
-                    depends_on=(AgentName.SQL,),
-                ),
-            )
-        if task_type is TaskType.ANOMALY_DETECTION:
-            return (
-                AgentPlanStep(
-                    agent_name=AgentName.ANALYTICS,
                     stage=ExecutionStage.FANOUT,
                     depends_on=(AgentName.SQL,),
                 ),
@@ -120,12 +119,11 @@ class ExecutionPlanBuilder:
         task_type: TaskType,
         fanout_steps: tuple[AgentPlanStep, ...],
     ) -> tuple[AgentPlanStep, ...]:
-        if task_type is not TaskType.WHY_EXPLANATION:
-            return ()
+        verifier_dependencies = tuple(step.agent_name for step in fanout_steps) or (AgentName.SQL,)
         return (
             AgentPlanStep(
                 agent_name=AgentName.VERIFIER,
                 stage=ExecutionStage.VERIFY,
-                depends_on=tuple(step.agent_name for step in fanout_steps),
+                depends_on=verifier_dependencies,
             ),
         )
