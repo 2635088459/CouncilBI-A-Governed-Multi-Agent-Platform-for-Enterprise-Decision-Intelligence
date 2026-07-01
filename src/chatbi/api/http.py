@@ -79,6 +79,7 @@ from chatbi.orchestration.worker import (
     InMemoryWorkerHandoffQueue,
     WorkerHandoffQueue,
 )
+from chatbi.runtime_metrics import RuntimeMetricsSnapshot, render_runtime_metrics
 from chatbi.semantic import SemanticNl2SqlPipeline, SemanticResolveResponse, SemanticResolveStatus
 
 
@@ -313,7 +314,10 @@ def is_runtime_ready(env: Mapping[str, str] | None = None) -> bool:
     return load_runtime_config(env).ready_for_traffic
 
 
-def metrics_text(env: Mapping[str, str] | None = None) -> str:
+def metrics_text(
+    env: Mapping[str, str] | None = None,
+    runtime_metrics: RuntimeMetricsSnapshot | None = None,
+) -> str:
     config = load_runtime_config(env)
     ready_value = 1 if config.ready_for_traffic else 0
     return "\n".join(
@@ -324,6 +328,7 @@ def metrics_text(env: Mapping[str, str] | None = None) -> str:
             "# HELP chatbi_api_ready Readiness state for user traffic.",
             "# TYPE chatbi_api_ready gauge",
             f"chatbi_api_ready {ready_value}",
+            render_runtime_metrics(runtime_metrics),
             "",
         )
     )
@@ -1087,7 +1092,8 @@ def create_app(
                     "DATABASE_URL": active_runtime_config.database_url or "",
                     "REDIS_URL": active_runtime_config.redis_url or "",
                     "VECTOR_STORE_URL": active_runtime_config.vector_store_url or "",
-                }
+                },
+                runtime_metrics=chatbi_application.runtime_metrics_snapshot(),
             ),
             media_type="text/plain; version=0.0.4",
         )
@@ -2294,6 +2300,30 @@ def create_app(
             payload=body.to_payload(),
         )
         return response_from_envelope(envelope, status_code=status_code_for_envelope(envelope))
+
+    @app.get("/api/v1/evals/{eval_run_id}")
+    def eval_report(  # pyright: ignore[reportUnusedFunction]
+        eval_run_id: str,
+        user_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
+    ) -> JSONResponse:
+        active_trace_id, rejected = require_headers(
+            chatbi_application,
+            f"/api/v1/evals/{eval_run_id}",
+            trace_id,
+            authorization,
+        )
+        if rejected is not None:
+            return rejected
+
+        envelope = chatbi_application.handle_eval_report(
+            user_id=user_id,
+            trace_id=active_trace_id,
+            eval_run_id=eval_run_id,
+        )
+        status_code = 404 if envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT else status_code_for_envelope(envelope)
+        return response_from_envelope(envelope, status_code=status_code)
 
     @app.get("/api/v1/health")
     def health(  # pyright: ignore[reportUnusedFunction]

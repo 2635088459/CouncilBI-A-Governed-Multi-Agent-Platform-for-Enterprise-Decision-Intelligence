@@ -22,14 +22,31 @@ from chatbi.api.models import (
     observability_trace_payload,
     quality_dashboard_payload,
     success_envelope,
+    trace_event_payload,
     to_chat_query_response,
     trace_detail_payload,
     utc_now_iso,
 )
-from chatbi.core.contracts import Locale, QueryAnswer, QueryRequest, UserRole, new_trace_id
+from chatbi.core.contracts import (
+    Locale,
+    QueryAnswer,
+    QueryHistoryRecord,
+    QueryRequest,
+    UserRole,
+    new_trace_id,
+)
 from chatbi.core.contracts import utc_now
 from chatbi.data_model import DataModelCatalog, build_default_data_model_catalog
 from chatbi.evaluation import BenchmarkExpectation, EvaluationObservation, EvaluationScorer
+from chatbi.evaluation_repository import (
+    EvalCase,
+    EvalRunner,
+    EvalScore,
+    EvaluationRepository,
+    InMemoryEvaluationRepository,
+)
+from chatbi.evaluation_report import eval_run_report
+from chatbi.governance.audit import GuardrailAuditRecord
 from chatbi.observability import (
     AlertEvaluator,
     InMemoryObservabilityStore,
@@ -44,6 +61,13 @@ from chatbi.observability_logs import (
     ObservabilityLogger,
 )
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
+from chatbi.runtime_metrics import RuntimeMetricsSnapshot, runtime_metrics_snapshot
+from chatbi.trace_events import (
+    InMemoryTraceEventStore,
+    TraceEvent,
+    TraceEventRecorder,
+    TraceEventStatus,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +102,7 @@ class ChatBIApplication:
         rate_limit_per_minute: int = 60,
         trace_recorder: TraceRecorder | None = None,
         observability_logger: ObservabilityLogger | None = None,
+        evaluation_repository: EvaluationRepository | None = None,
     ) -> None:
         self._orchestrator = orchestrator or SimpleOrchestrator()
         self._data_model_catalog = data_model_catalog or build_default_data_model_catalog()
@@ -91,6 +116,9 @@ class ChatBIApplication:
         self._runtime_samples: list[RuntimeRequestSample] = []
         self._latest_eval_result: EvalRunResultPayload | None = None
         self._observability_logger = observability_logger or ObservabilityLogger()
+        self._evaluation_repository = evaluation_repository or InMemoryEvaluationRepository()
+        self._eval_runner = EvalRunner(self._evaluation_repository)
+        self._trace_event_recorder = TraceEventRecorder(service="backend-api")
 
     @property
     def orchestrator(self) -> SimpleOrchestrator:
@@ -107,6 +135,17 @@ class ChatBIApplication:
     @property
     def observability_log_store(self) -> InMemoryObservabilityLogStore:
         return self._observability_logger.store
+
+    @property
+    def evaluation_repository(self) -> EvaluationRepository:
+        return self._evaluation_repository
+
+    @property
+    def trace_event_store(self) -> InMemoryTraceEventStore:
+        return self._trace_event_recorder.store
+
+    def runtime_metrics_snapshot(self) -> RuntimeMetricsSnapshot:
+        return runtime_metrics_snapshot(tuple(self._runtime_samples))
 
     def record_api_audit(
         self,
@@ -132,6 +171,10 @@ class ChatBIApplication:
     ) -> ApiEnvelope:
         active_trace_id = trace_id or new_trace_id()
         started_at = monotonic()
+        request_trace_event = self._trace_event_recorder.start(
+            trace_id=active_trace_id,
+            span_name=TraceSpanName.REQUEST_RECEIVED.value,
+        )
         self._trace_recorder.record(
             trace_id=active_trace_id,
             span_name=TraceSpanName.REQUEST_RECEIVED,
@@ -166,6 +209,11 @@ class ChatBIApplication:
                 status_code=429,
                 started_at=started_at,
             )
+            self._complete_request_trace_event(
+                started_event=request_trace_event,
+                response=rate_limited,
+                status_code=429,
+            )
             return rate_limited
 
         cached = self._get_cached_query(payload, idempotency_key)
@@ -186,6 +234,11 @@ class ChatBIApplication:
                 endpoint="/api/v1/chat/query",
                 status_code=200,
                 started_at=started_at,
+            )
+            self._complete_request_trace_event(
+                started_event=request_trace_event,
+                response=cached,
+                status_code=200,
             )
             return cached
 
@@ -235,6 +288,11 @@ class ChatBIApplication:
             endpoint="/api/v1/chat/query",
             status_code=200,
             started_at=started_at,
+        )
+        self._complete_request_trace_event(
+            started_event=request_trace_event,
+            response=response_envelope,
+            status_code=200,
         )
         return response_envelope
 
@@ -439,11 +497,24 @@ class ChatBIApplication:
             return response
 
         payload = observability_trace_payload(replay)
+        query_record = self._orchestrator.replay(trace_id)
         response = envelope(
             data={
                 "trace_id": payload.trace_id,
                 "completed": payload.completed,
                 "spans": payload.spans,
+                "trace_events": tuple(
+                    asdict(trace_event_payload(event))
+                    for event in self._trace_events_for_trace_id(trace_id)
+                ),
+                "query_detail": (
+                    None
+                    if query_record is None
+                    else self._query_detail_data(query_record)
+                ),
+                "api_audit": self._api_audit_items(trace_id),
+                "guardrail_audit": self._guardrail_audit_data(trace_id),
+                "logs": self._observability_log_items(trace_id),
             },
             trace_id=trace_id,
         )
@@ -513,10 +584,17 @@ class ChatBIApplication:
             )
             for question in questions
         )
+        expectations = self._benchmark_expectations(questions)
         result = self._evaluation_scorer.score_suite(
             eval_suite_id=payload.eval_suite_id,
             observations=observations,
-            expectations=self._benchmark_expectations(questions),
+            expectations=expectations,
+        )
+        self._persist_eval_run_result(
+            eval_run_id=result.eval_run_id,
+            eval_suite_id=payload.eval_suite_id,
+            observations=observations,
+            expectations=expectations,
         )
         self._latest_eval_result = result
         response = envelope(
@@ -527,6 +605,45 @@ class ChatBIApplication:
             trace_id=trace_id,
             user_id=user_id,
             endpoint="/api/v1/evals/run",
+            status_code=200,
+        )
+        return response
+
+    def handle_eval_report(
+        self,
+        user_id: str,
+        trace_id: str,
+        eval_run_id: str,
+    ) -> ApiEnvelope:
+        rate_limited = self._rate_limit_response(
+            user_id=user_id,
+            trace_id=trace_id,
+            endpoint=f"/api/v1/evals/{eval_run_id}",
+        )
+        if rate_limited is not None:
+            return rate_limited
+
+        report = eval_run_report(self._evaluation_repository, eval_run_id)
+        if report is None:
+            response = error_envelope(
+                code=ApiErrorCode.REQ_INVALID_ARGUMENT,
+                message="Eval run id was not found.",
+                trace_id=trace_id,
+            )
+            self._audit(
+                trace_id=trace_id,
+                user_id=user_id,
+                endpoint=f"/api/v1/evals/{eval_run_id}",
+                status_code=404,
+                error_code=ApiErrorCode.REQ_INVALID_ARGUMENT,
+            )
+            return response
+
+        response = envelope(data=report.to_payload(), trace_id=trace_id)
+        self._audit(
+            trace_id=trace_id,
+            user_id=user_id,
+            endpoint=f"/api/v1/evals/{eval_run_id}",
             status_code=200,
         )
         return response
@@ -664,6 +781,87 @@ class ChatBIApplication:
             error_code=record.error_code,
         )
 
+    def _query_detail_data(self, record: QueryHistoryRecord) -> dict[str, object]:
+        detail = trace_detail_payload(record)
+        return {
+            "trace_id": detail.trace_id,
+            "request": {
+                "user_id": detail.request["user_id"],
+                "session_id": detail.request["session_id"],
+                "question": detail.request["question"],
+                "locale": record.request.locale.value,
+                "role": record.request.role.value,
+            },
+            "answer": detail.answer,
+            "status": detail.status.value,
+            "created_at": detail.created_at,
+            "failed_error_code": (
+                None
+                if detail.failed_error_code is None
+                else detail.failed_error_code.value
+            ),
+        }
+
+    def _trace_events_for_trace_id(self, trace_id: str) -> tuple[TraceEvent, ...]:
+        events = (
+            *self._trace_event_recorder.store.list_by_trace_id(trace_id),
+            *self._orchestrator.trace_event_store.list_by_trace_id(trace_id),
+        )
+        return tuple(
+            sorted(
+                events,
+                key=lambda event: (
+                    event.started_at,
+                    "" if event.ended_at is None else event.ended_at.isoformat(),
+                    event.service,
+                ),
+            )
+        )
+
+    def _api_audit_items(self, trace_id: str) -> tuple[dict[str, object], ...]:
+        return tuple(
+            asdict(self._audit_payload(record))
+            for record in self._audit_records
+            if record.trace_id == trace_id
+        )
+
+    def _guardrail_audit_data(self, trace_id: str) -> dict[str, object] | None:
+        record = self._orchestrator.guardrail_audit_log.get(trace_id)
+        if record is None:
+            return None
+        return self._guardrail_audit_record_data(record)
+
+    def _guardrail_audit_record_data(self, record: GuardrailAuditRecord) -> dict[str, object]:
+        return {
+            "audit_event_id": record.audit_event_id,
+            "trace_id": record.trace_id,
+            "user_id": record.user_id,
+            "role": record.role.value,
+            "original_sql": record.original_sql,
+            "decision": record.decision.value,
+            "safe_sql": record.safe_sql,
+            "error_code": None if record.error_code is None else record.error_code.value,
+            "message": record.message,
+            "occurred_at": record.occurred_at.isoformat(),
+        }
+
+    def _observability_log_items(self, trace_id: str) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                "trace_id": record.trace_id,
+                "level": record.level.value,
+                "message": record.message,
+                "endpoint": record.endpoint,
+                "user_id": record.user_id,
+                "service": record.service,
+                "event": record.event,
+                "request_id": record.request_id,
+                "attributes": record.attributes,
+                "recorded_at": record.recorded_at.isoformat(),
+            }
+            for record in self._observability_logger.store.list_by_trace_id(trace_id)
+        )
+
     def _record_answer_spans(self, answer: QueryAnswer) -> None:
         self._trace_recorder.record(
             trace_id=answer.trace_id,
@@ -741,6 +939,28 @@ class ChatBIApplication:
             )
         )
 
+    def _complete_request_trace_event(
+        self,
+        started_event: TraceEvent,
+        response: ApiEnvelope,
+        status_code: int,
+    ) -> None:
+        self._trace_event_recorder.complete(
+            started_event,
+            status=self._trace_event_status_for_response(response, status_code),
+        )
+
+    def _trace_event_status_for_response(
+        self,
+        response: ApiEnvelope,
+        status_code: int,
+    ) -> TraceEventStatus:
+        if status_code >= 500:
+            return TraceEventStatus.FAILED
+        if status_code >= 400 or response.code != 0:
+            return TraceEventStatus.DEGRADED
+        return TraceEventStatus.SUCCEEDED
+
     def _run_eval_case_observation(
         self,
         user_id: str,
@@ -774,6 +994,92 @@ class ChatBIApplication:
             unsupported_claim_count=1 if answer.evidence_uncertainty else 0,
             latency_ms=latency_ms,
         )
+
+    def _persist_eval_run_result(
+        self,
+        eval_run_id: str,
+        eval_suite_id: str,
+        observations: tuple[EvaluationObservation, ...],
+        expectations: dict[str, BenchmarkExpectation],
+    ) -> None:
+        observations_by_question = {
+            observation.question: observation
+            for observation in observations
+        }
+        cases = tuple(
+            EvalCase(
+                case_id=self._eval_case_id(index),
+                question=observation.question,
+                expected_sql_fragments=(
+                    expectations[observation.question].expected_tables
+                    + expectations[observation.question].expected_fields
+                ),
+                permission_context={"source": "api_eval_run"},
+            )
+            for index, observation in enumerate(observations, start=1)
+        )
+        self._eval_runner.run(
+            eval_suite_id=eval_suite_id,
+            cases=cases,
+            score_case=lambda case: self._eval_score_for_case(
+                case=case,
+                observation=observations_by_question[case.question],
+                expectation=expectations[case.question],
+            ),
+            eval_run_id=eval_run_id,
+        )
+
+    def _eval_score_for_case(
+        self,
+        case: EvalCase,
+        observation: EvaluationObservation,
+        expectation: BenchmarkExpectation,
+    ) -> EvalScore:
+        case_result = self._evaluation_scorer.score_case(
+            observation=observation,
+            expectation=expectation,
+        )
+        return EvalScore(
+            case_id=case.case_id,
+            sql_correct=self._eval_sql_correct(observation, expectation),
+            sql_safe=self._eval_sql_safe(observation, expectation),
+            rag_faithful=self._eval_rag_faithful(observation, expectation),
+            answer_quality_score=case_result.score,
+        )
+
+    def _eval_sql_correct(
+        self,
+        observation: EvaluationObservation,
+        expectation: BenchmarkExpectation,
+    ) -> bool:
+        if expectation.dangerous_sql:
+            return True
+        expected_tokens = expectation.expected_tables + expectation.expected_fields
+        sql_text = observation.sql_text.lower()
+        return all(token.lower() in sql_text for token in expected_tokens)
+
+    def _eval_sql_safe(
+        self,
+        observation: EvaluationObservation,
+        expectation: BenchmarkExpectation,
+    ) -> bool:
+        if expectation.dangerous_sql:
+            return observation.error_code is ApiErrorCode.SQL_GUARDRAIL_BLOCKED
+        return observation.error_code is None
+
+    def _eval_rag_faithful(
+        self,
+        observation: EvaluationObservation,
+        expectation: BenchmarkExpectation,
+    ) -> bool | None:
+        if not expectation.requires_citation and observation.claim_count == 0:
+            return None
+        if expectation.requires_citation and observation.evidence_count == 0:
+            return False
+        return observation.unsupported_claim_count == 0
+
+    def _eval_case_id(self, index: int) -> str:
+        return f"case_{index:03d}"
 
     def _benchmark_expectations(
         self,

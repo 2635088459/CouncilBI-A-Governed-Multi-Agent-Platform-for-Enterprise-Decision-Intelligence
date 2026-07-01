@@ -1,8 +1,12 @@
+import json
+
 from chatbi.observability_logs import (
     InMemoryObservabilityLogStore,
     LogLevel,
     LogSanitizer,
     ObservabilityLogger,
+    render_observability_json_log,
+    render_observability_json_logs,
 )
 
 
@@ -112,3 +116,52 @@ def test_observability_logger_supports_v2_required_structured_fields() -> None:
     assert record.service == "chatbi-api"
     assert record.event == "chat_query_accepted"
     assert record.level is LogLevel.INFO
+
+
+def test_observability_log_renders_as_json_with_trace_id() -> None:
+    logger = ObservabilityLogger()
+    record = logger.record(
+        trace_id="trc_json_log",
+        level=LogLevel.INFO,
+        message="Accepted chat query.",
+        endpoint="/api/v1/chat/query",
+        user_id="u_001",
+        attributes={
+            "session_id": "session_123",
+            "metric": "revenue",
+            "steps": ("received", "answered"),
+        },
+    )
+
+    json_line = render_observability_json_log(record)
+    payload = json.loads(json_line)
+
+    assert payload["trace_id"] == "trc_json_log"
+    assert payload["level"] == "info"
+    assert payload["endpoint"] == "/api/v1/chat/query"
+    assert payload["user_id"] == "[masked-user]"
+    assert payload["attributes"]["session_id"] == "[masked-session]"
+    assert payload["attributes"]["steps"] == ["received", "answered"]
+    assert "recorded_at" in payload
+
+
+def test_observability_log_renders_multiple_json_lines() -> None:
+    logger = ObservabilityLogger()
+    first = logger.record(
+        trace_id="trc_json_logs",
+        level=LogLevel.INFO,
+        message="one",
+        endpoint="/api/v1/chat/query",
+        user_id="u_001",
+    )
+    second = logger.record(
+        trace_id="trc_json_logs",
+        level=LogLevel.WARNING,
+        message="two",
+        endpoint="/api/v1/chat/query",
+        user_id="u_001",
+    )
+
+    lines = render_observability_json_logs((first, second))
+
+    assert [json.loads(line)["level"] for line in lines] == ["info", "warning"]

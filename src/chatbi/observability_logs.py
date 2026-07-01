@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+import json
 import re
 from typing import Any, Mapping, cast
 
@@ -175,3 +176,56 @@ class ObservabilityLogger:
         )
         self._store.add(record)
         return record
+
+
+def observability_log_payload(record: ObservabilityLogRecord) -> dict[str, Any]:
+    """Return the JSON-friendly shape for one structured log record."""
+
+    return {
+        "trace_id": record.trace_id,
+        "level": record.level.value,
+        "message": record.message,
+        "endpoint": record.endpoint,
+        "user_id": record.user_id,
+        "service": record.service,
+        "event": record.event,
+        "request_id": record.request_id,
+        "attributes": _json_safe(record.attributes),
+        "recorded_at": record.recorded_at.isoformat(),
+    }
+
+
+def render_observability_json_log(record: ObservabilityLogRecord) -> str:
+    """Render one log record as a compact JSON line."""
+
+    return json.dumps(
+        observability_log_payload(record),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def render_observability_json_logs(
+    records: tuple[ObservabilityLogRecord, ...],
+) -> tuple[str, ...]:
+    """Render multiple log records as JSON lines."""
+
+    return tuple(render_observability_json_log(record) for record in records)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, StrEnum):
+        return value.value
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[str, Any], value)
+        return {key: _json_safe(item) for key, item in mapping.items()}
+    if isinstance(value, tuple):
+        tuple_value = cast(tuple[Any, ...], value)
+        return [_json_safe(item) for item in tuple_value]
+    if isinstance(value, list):
+        list_value = cast(list[Any], value)
+        return [_json_safe(item) for item in list_value]
+    return value

@@ -1,7 +1,8 @@
-from chatbi.api.models import ApiErrorCode, ChatQueryRequestPayload
+from chatbi.api.models import ApiErrorCode, ChatQueryRequestPayload, EvalRunRequestPayload
 from chatbi.application.app import ChatBIApplication
 from chatbi.core.contracts import ErrorCode, Locale, UserRole
 from chatbi.observability import TraceSpanName, TraceSpanStatus
+from chatbi.trace_events import TraceEventStatus
 
 
 def make_payload(question: str = "Show revenue trend.") -> ChatQueryRequestPayload:
@@ -134,6 +135,25 @@ def test_handle_chat_query_writes_standard_observability_trace() -> None:
     assert replay.spans[-1].attributes["status_code"] == 200
 
 
+def test_handle_chat_query_writes_spec_trace_events() -> None:
+    app = ChatBIApplication()
+
+    envelope = app.handle_chat_query(
+        make_payload("Show revenue trend."),
+        trace_id="trc_spec_trace_success",
+    )
+    events = app.trace_event_store.list_by_trace_id(envelope.trace_id)
+
+    assert tuple(event.status for event in events) == (
+        TraceEventStatus.STARTED,
+        TraceEventStatus.SUCCEEDED,
+    )
+    assert events[0].service == "backend-api"
+    assert events[0].span_name == "request_received"
+    assert events[1].latency_ms is not None
+    assert events[1].latency_ms >= 0
+
+
 def test_blocked_sql_writes_failed_guardrail_trace_span() -> None:
     app = ChatBIApplication()
 
@@ -151,6 +171,40 @@ def test_blocked_sql_writes_failed_guardrail_trace_span() -> None:
     )
     assert guardrail_span.status is TraceSpanStatus.FAILED
     assert guardrail_span.attributes["decision"] == "deny"
+
+
+def test_blocked_sql_writes_degraded_spec_trace_event() -> None:
+    app = ChatBIApplication()
+
+    envelope = app.handle_chat_query(
+        make_payload("DROP TABLE orders"),
+        trace_id="trc_spec_trace_blocked",
+    )
+    events = app.trace_event_store.list_by_trace_id(envelope.trace_id)
+
+    assert events[-1].status is TraceEventStatus.DEGRADED
+    assert events[-1].ended_at is not None
+    assert events[-1].latency_ms is not None
+
+
+def test_observability_trace_detail_includes_denied_guardrail_audit() -> None:
+    app = ChatBIApplication()
+
+    app.handle_chat_query(
+        make_payload("DROP TABLE orders"),
+        trace_id="trc_guardrail_trace_detail_deny",
+    )
+    envelope = app.handle_observability_trace_detail(
+        trace_id="trc_guardrail_trace_detail_deny",
+        user_id="u_001",
+    )
+
+    assert envelope.data is not None
+    guardrail_audit = envelope.data["guardrail_audit"]
+    assert guardrail_audit["decision"] == "deny"
+    assert guardrail_audit["original_sql"] == "DROP TABLE orders"
+    assert guardrail_audit["error_code"] == "SQL_DENY_STATEMENT"
+    assert guardrail_audit["message"] == "Only SELECT statements are allowed."
 
 
 def test_handle_chat_query_writes_sanitized_observability_logs() -> None:
@@ -171,3 +225,79 @@ def test_handle_chat_query_writes_sanitized_observability_logs() -> None:
     assert "408-555-1234" not in serialized_logs
     assert "[masked-email]" in serialized_logs
     assert "[masked-phone]" in serialized_logs
+
+
+def test_handle_eval_run_persists_run_and_scores_by_eval_run_id() -> None:
+    app = ChatBIApplication()
+
+    envelope = app.handle_eval_run(
+        user_id="u_001",
+        trace_id="trc_eval_app",
+        payload=EvalRunRequestPayload(
+            eval_suite_id="backend_api_smoke",
+            questions=("Show revenue trend.", "DROP TABLE orders"),
+            locale=Locale.EN,
+            role=UserRole.ANALYST,
+        ),
+    )
+
+    assert envelope.data is not None
+    eval_run_id = envelope.data["eval_run_id"]
+    assert isinstance(eval_run_id, str)
+
+    saved_run = app.evaluation_repository.run_by_id(eval_run_id)
+    saved_scores = app.evaluation_repository.scores_by_run_id(eval_run_id)
+
+    assert saved_run is not None
+    assert saved_run.eval_suite_id == "backend_api_smoke"
+    assert saved_run.total_cases == 2
+    assert saved_run.sql_safety_score == 1.0
+    assert saved_run.release_gate_passed is True
+    assert tuple(score.case_id for score in saved_scores) == ("case_001", "case_002")
+
+
+def test_handle_eval_report_returns_saved_eval_run_report() -> None:
+    app = ChatBIApplication()
+
+    run_envelope = app.handle_eval_run(
+        user_id="u_001",
+        trace_id="trc_eval_report_seed",
+        payload=EvalRunRequestPayload(
+            eval_suite_id="backend_api_smoke",
+            questions=("Show revenue trend.", "DROP TABLE orders"),
+            locale=Locale.EN,
+            role=UserRole.ANALYST,
+        ),
+    )
+    assert run_envelope.data is not None
+    eval_run_id = run_envelope.data["eval_run_id"]
+    assert isinstance(eval_run_id, str)
+
+    report_envelope = app.handle_eval_report(
+        user_id="u_001",
+        trace_id="trc_eval_report_lookup",
+        eval_run_id=eval_run_id,
+    )
+
+    assert report_envelope.code == 0
+    assert report_envelope.data is not None
+    assert report_envelope.data["eval_run_id"] == eval_run_id
+    assert report_envelope.data["eval_suite_id"] == "backend_api_smoke"
+    assert report_envelope.data["total_cases"] == 2
+    assert report_envelope.data["overall_score"] == 1.0
+    assert report_envelope.data["metric_breakdown"]["sql_safety"] == 1.0
+    assert report_envelope.data["failed_cases_detail"] == ()
+
+
+def test_handle_eval_report_returns_not_found_for_missing_eval_run() -> None:
+    app = ChatBIApplication()
+
+    envelope = app.handle_eval_report(
+        user_id="u_001",
+        trace_id="trc_eval_report_missing",
+        eval_run_id="eval_missing",
+    )
+
+    assert envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT
+    assert envelope.message == "Eval run id was not found."
+    assert envelope.trace_id == "trc_eval_report_missing"

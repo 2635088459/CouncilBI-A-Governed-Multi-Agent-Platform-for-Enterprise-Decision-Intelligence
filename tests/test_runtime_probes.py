@@ -92,6 +92,35 @@ def test_metrics_exposes_prometheus_text(monkeypatch: Any) -> None:
     assert "text/plain" in response.headers["content-type"]
     assert 'chatbi_api_info{service="chatbi-api"} 1' in response.text
     assert "chatbi_api_ready 1" in response.text
+    assert "chatbi_api_request_count_total" in response.text
+    assert "chatbi_api_error_count_total" in response.text
+    assert "chatbi_api_request_latency_ms_count" in response.text
+
+
+def test_metrics_reflects_recorded_chat_query_request(monkeypatch: Any) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://chatbi:test@localhost:5432/chatbi")
+    client: Any = TestClient(create_app())
+    client.post(
+        "/api/v1/chat/query",
+        headers={
+            "Authorization": "Bearer test-token",
+            "X-Trace-Id": "trc_metrics_query",
+        },
+        json={
+            "user_id": "u_001",
+            "session_id": "s_001",
+            "question": "Show revenue trend.",
+            "locale": "en",
+            "role": "business_user",
+        },
+    )
+
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "chatbi_api_request_count_total 1" in response.text
+    assert "chatbi_api_error_count_total 0" in response.text
+    assert "chatbi_api_request_latency_ms_count 1" in response.text
 
 
 def test_readyz_uses_database_readiness_checker_when_provided() -> None:

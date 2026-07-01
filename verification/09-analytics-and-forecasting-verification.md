@@ -1,108 +1,110 @@
 # Verification: 09 Analytics and Forecasting
 
-This document records the current machine-verifiable status for `spec/version1/09-analytics-and-forecasting.spec.md`.
+This document records the current machine-verifiable status for `spec/version2/09-analytics-and-forecasting.spec.md`.
 
 ## Scope
 
-Verified workflow:
+Verified v2 workflow:
 
 ```text
-SQL-style revenue time series
-  -> TimeSeriesPoint normalization
-  -> data quality check
-  -> anomaly detection with Bollinger-style rolling z-score
-  -> deterministic forecast
-  -> moving-average fallback on model fit failure
-  -> confidence interval bounds
-  -> fact / judgment / uncertainty narrative
-  -> model_run metadata
-  -> SimpleOrchestrator analytics_result
-  -> Backend API response
-  -> Frontend QueryResultViewModel
-  -> ChatPageProps AnalyticsInsightProps
+SQL-backed metric rows
+  -> AnalyticsRequest
+  -> date/value validation
+  -> insufficient-data degrade path
+  -> rolling z-score anomaly detection
+  -> deterministic linear forecast with lower/upper bounds
+  -> AnalyticsResult
+  -> analytics.results persistence by trace_id
+  -> synchronous v2 API
+  -> asynchronous analytics worker handoff
+  -> orchestrator analytics adapter
+  -> frontend API client, state store, props, render model, static demo entry
 ```
 
 Covered implementation files:
 
 | Area | File |
 |---|---|
-| Analytics agent and time-series logic | `src/chatbi/agents/analytics_agent.py` |
-| Forecast task routing | `src/chatbi/orchestration/routing.py` |
-| Orchestrator integration | `src/chatbi/orchestration/simple_orchestrator.py` |
-| Core answer contract | `src/chatbi/core/contracts.py` |
-| API response mapping | `src/chatbi/api/models.py` |
-| Frontend analytics view model | `src/chatbi/frontend/view_models.py` |
-| Frontend analytics component props | `src/chatbi/frontend/component_props.py` |
-| Frontend analytics i18n labels | `src/chatbi/frontend/i18n.py` |
+| Typed analytics contract and deterministic service | `src/chatbi/analytics.py` |
+| Data model catalog entry | `src/chatbi/data_model.py` |
+| In-memory and PostgreSQL repositories | `src/chatbi/analytics_repository.py` |
+| PostgreSQL row mapping and DDL | `src/chatbi/analytics_postgres_rows.py` |
+| Async analytics task worker | `src/chatbi/analytics_worker.py` |
+| Backend v2 analytics endpoints | `src/chatbi/api/http.py` |
+| Orchestrator adapter | `src/chatbi/orchestration/analytics_runner.py` |
+| Frontend API client | `src/chatbi/frontend/api_client.py` |
+| Frontend analytics state | `src/chatbi/frontend/analytics_state.py` |
+| Frontend props/i18n/render integration | `src/chatbi/frontend/component_props.py`, `src/chatbi/frontend/i18n.py`, `src/chatbi/frontend/render_model.py` |
+| Static browser prototype entry | `src/chatbi/frontend/static_assets/app.js`, `src/chatbi/frontend/static_assets/styles.css` |
 
-## Covered Requirements
+## Requirement Coverage
 
 | Requirement | Verification |
 |---|---|
-| `FR-09-001` | `tests/test_analytics_agent.py::test_analytics_agent_empty_series_returns_quality_error_not_model_crash` verifies data quality runs before modeling and returns a controlled result instead of crashing |
-| `FR-09-002` | `tests/test_analytics_agent.py::test_analytics_agent_detects_injected_spike` verifies `anomaly_points`, `anomaly_score`, and `anomaly_level` are returned |
-| `FR-09-003` | `tests/test_analytics_agent.py::test_analytics_agent_forecast_includes_bounds_and_model_used` verifies `forecast_series`, `lower_bound`, `upper_bound`, and `model_used` |
-| `FR-09-004` | `tests/test_analytics_agent.py::test_analytics_agent_falls_back_to_moving_average_when_fit_fails` verifies moving-average fallback and fallback flag |
-| `FR-09-005` | `tests/test_analytics_agent.py::test_analytics_agent_narrative_uses_fact_judgment_uncertainty_sections` verifies narrative sections: fact, judgment, uncertainty |
-| `FR-09-006` | `tests/test_analytics_agent.py::test_analytics_agent_forecast_includes_bounds_and_model_used` exercises `model_used`; `model_run` includes `model_version`, requested model, and parameters in `AnalyticsAgentRunner.run` |
-| `NFR-09-001` | Full suite and focused analytics tests run well under the 6s target locally; formal P95 benchmark over a defined workload remains future work |
-| `NFR-09-002` | The current analytics implementation is deterministic: it uses pure Python arithmetic, fixed windows, no randomness, and no external model server |
-| `NFR-09-003` | Per-run fallback warnings are exposed; sustained model failure alerting is not implemented in the MVP |
+| `FR-09-001` | `tests/test_analytics_service.py::test_invalid_dates_return_analytics_invalid_time_series` verifies invalid dates return `ANALYTICS_INVALID_TIME_SERIES`. |
+| `FR-09-002` | `tests/test_analytics_service.py::test_valid_daily_revenue_fixture_returns_forecast_and_persists_by_trace_id` runs anomaly detection for eligible rows and returns the required anomaly field. |
+| `FR-09-003` | `tests/test_analytics_service.py::test_forecast_points_keep_bounds_ordered` verifies forecast points are generated for enough historical rows. |
+| `FR-09-004` | `tests/test_analytics_service.py::test_two_point_fixture_degrades_to_trend_summary` verifies fewer than 3 rows degrade to trend summary plus `INSUFFICIENT_DATA`. |
+| `FR-09-005` | `tests/test_analytics_postgres_rows.py` and `tests/test_migrations.py::test_analytics_v2_tables_sql_creates_spec_v2_result_table` verify method, model version, parameters, and result fields can be persisted. |
+| `FR-09-006` | `tests/test_v2_chat_query_http.py::test_v2_analytics_analyze_persists_result_and_result_endpoint_reads_it` verifies frontend-facing output includes anomaly and forecast fields. |
+| `NFR-09-001` | `tests/test_analytics_performance.py::test_analytics_over_1000_daily_points_stays_under_local_p95_budget` verifies 1,000 daily points stay under the 6000ms local P95 budget. |
+| `NFR-09-002` | `tests/test_analytics_service.py::test_same_fixture_returns_identical_anomaly_dates` verifies deterministic anomaly dates for repeated runs. |
+| `NFR-09-003` | Focused pyright checks over `src/chatbi/analytics.py`, analytics worker/frontend files, and related tests report 0 errors. |
 
 ## Acceptance Criteria
 
 | Acceptance Criterion | Verification |
 |---|---|
-| `AC-09-001` | `tests/test_analytics_agent.py::test_analytics_agent_detects_injected_spike` verifies an injected spike returns at least one anomaly point with an anomaly level |
-| `AC-09-002` | `tests/test_analytics_agent.py::test_analytics_agent_forecast_includes_bounds_and_model_used` verifies forecast bounds and model name |
-| `AC-09-003` | `tests/test_analytics_agent.py::test_analytics_agent_falls_back_to_moving_average_when_fit_fails` verifies fallback flag and moving-average result |
-| `AC-09-004` | `tests/test_analytics_agent.py::test_analytics_agent_narrative_uses_fact_judgment_uncertainty_sections` verifies all three narrative sections |
-| `AC-09-005` | `.venv/bin/python -m pytest` completes locally in under 1 second for the full suite; formal P95 analytics latency benchmark remains future work |
+| `AC-09-001` | Valid daily revenue fixture returns a result with anomaly and forecast fields and no validation error. |
+| `AC-09-002` | Two-point fixture returns `INSUFFICIENT_DATA`, empty anomaly points, and empty forecast points. |
+| `AC-09-003` | Forecast fixture checks every point satisfies `lower <= value <= upper`. |
+| `AC-09-004` | Repository and API tests read saved analytics records back by `trace_id` with method and model version. |
+| `AC-09-005` | Determinism test compares anomaly timestamps from two runs of the same fixture. |
 
 ## Test Plan Mapping
 
 | Test Case | Current Verification |
 |---|---|
-| `TC-09-001` | `tests/test_analytics_agent.py::test_analytics_agent_detects_injected_spike` |
-| `TC-09-002` | `tests/test_analytics_agent.py::test_analytics_agent_forecast_includes_bounds_and_model_used`; v1 uses a deterministic trend approximation for Prophet/ARIMA-shaped outputs instead of installing heavy model dependencies |
-| `TC-09-003` | `tests/test_analytics_agent.py::test_analytics_agent_falls_back_to_moving_average_when_fit_fails` |
-| `TC-09-004` | `tests/test_analytics_agent.py::test_analytics_agent_narrative_uses_fact_judgment_uncertainty_sections` |
-| `TC-09-005` | `tests/test_frontend_backend_flow.py::test_frontend_app_shell_renders_analytics_props_from_real_backend_forecast` verifies forecast request -> backend -> analytics -> API -> frontend props |
-| `TC-09-006` | `tests/test_analytics_agent.py::test_analytics_agent_empty_series_returns_quality_error_not_model_crash` |
+| `TC-09-001` | `.venv/bin/python -m pyright src/chatbi/analytics.py tests/test_analytics_performance.py` |
+| `TC-09-002` | `tests/test_analytics_service.py::test_valid_daily_revenue_fixture_returns_forecast_and_persists_by_trace_id` |
+| `TC-09-003` | `tests/test_analytics_service.py::test_two_point_fixture_degrades_to_trend_summary` |
+| `TC-09-004` | `tests/test_analytics_service.py::test_forecast_points_keep_bounds_ordered` |
+| `TC-09-005` | `tests/test_analytics_repository.py`, `tests/test_analytics_postgres_rows.py`, and v2 API result lookup tests |
+| `TC-09-006` | `tests/test_analytics_service.py::test_same_fixture_returns_identical_anomaly_dates` |
+| `TC-09-007` | `tests/test_analytics_performance.py::test_analytics_over_1000_daily_points_stays_under_local_p95_budget` |
 
 ## Integration Coverage
 
 | Layer | Verification |
 |---|---|
-| Agent unit behavior | `tests/test_analytics_agent.py` |
-| Orchestrator forecast routing | `tests/test_simple_orchestrator.py::test_orchestrator_uses_execution_plan_for_forecast_question` |
-| API response contract | `tests/test_api_models.py::test_query_answer_converts_to_chat_query_response_payload`; `tests/test_api_models.py::test_success_envelope_contains_trace_id_and_required_answer_fields` |
-| Frontend parsing | `tests/test_frontend_view_models.py::test_build_query_result_view_model_renders_distinct_blocks` |
-| Frontend component props | `tests/test_frontend_component_props.py::test_build_chat_page_props_includes_analytics_insight_props`; `tests/test_frontend_component_props.py::test_build_chat_page_props_localizes_analytics_labels` |
-| Frontend/backend end to end | `tests/test_frontend_backend_flow.py::test_frontend_app_shell_renders_analytics_props_from_real_backend_forecast` |
+| Service contract | `tests/test_analytics_service.py` |
+| Persistence mapping | `tests/test_analytics_repository.py`, `tests/test_analytics_postgres_rows.py`, `tests/test_migrations.py` |
+| Data model catalog | `tests/test_data_model.py::test_analytics_v2_results_table_persists_method_parameters_and_forecasts` |
+| Async worker | `tests/test_analytics_worker.py`, `tests/test_worker_handoff.py` |
+| Orchestrator adapter | `tests/test_analytics_service_runner.py`, `tests/test_simple_orchestrator.py` |
+| Backend API | `tests/test_v2_chat_query_http.py` |
+| Frontend API/state/props | `tests/test_frontend_api_client.py`, `tests/test_frontend_analytics_state.py`, `tests/test_frontend_analytics_component_props.py` |
+| Frontend app shell/render/static build | `tests/test_frontend_app_shell.py`, `tests/test_frontend_render_model.py`, `tests/test_frontend_build_static.py` |
 
 ## Design Notes
 
-The current analytics slice is deterministic and dependency-light.
-
 In plain terms:
 
-1. `analytics_agent.py` is the analysis teacher: it checks whether the time series is usable, detects unusual points, forecasts future values, and explains the result.
-2. `simple_orchestrator.py` is the classroom coordinator: when the question looks like a forecast, it sends the revenue time series to the analytics agent and attaches the result to the final answer.
-3. `api/models.py` is the public handout: it exposes `analytics_result` so API callers can see the forecast, anomaly result, narrative, warnings, and model metadata.
-4. `view_models.py` turns the API's analytics JSON into a small frontend card model.
-5. `component_props.py` turns that card model into display-ready labels and narrative lines.
+1. `analytics.py` is the teacher's formula sheet. It defines what an analytics request must contain, what a result must contain, how bad input is rejected, and how simple deterministic forecasting works.
+2. `analytics_repository.py` is the notebook. The service does not care whether the notebook is memory or PostgreSQL; it only asks to save and load by `trace_id`.
+3. `analytics_worker.py` is the after-class assistant. Small jobs can run synchronously through the API, while longer analytics work can be queued and later marked `succeeded`, `failed`, or `timed_out`.
+4. `analytics_runner.py` is the translator for the older orchestrator shape. It lets the v2 service feed the existing final answer flow without making the rest of the orchestrator know every analytics detail.
+5. Frontend files turn the same result into user-facing state, labels, render regions, and a small static demo panel.
 
-The MVP does not install real ARIMA or Prophet packages. Instead, `ARIMA` and `PROPHET` requests use a deterministic trend-style calculation, and failed fits fall back to moving average. This keeps the implementation reproducible and fast while preserving the spec-level output contract.
+The v2 MVP intentionally uses deterministic in-process math instead of heavy ARIMA/Prophet dependencies. That keeps local tests fast, makes repeated outputs explainable, and satisfies the v2 contract that uncertainty must be explicit through warnings and bounds.
 
 ## Known Gaps
 
 | Gap | Reason |
 |---|---|
-| Real ARIMA/Prophet fitting | Deferred to avoid heavy dependencies in the in-memory MVP |
-| Formal 90-day P95 latency benchmark | Needs a defined benchmark fixture, runner, and statistical window |
-| Sustained model failure alerting | Requires observability/alert state from spec 10 |
-| Holiday calendar / drift monitoring | Listed as open questions in the spec |
+| Real model training and registry | Out of scope for spec v2 section 09. |
+| Live PostgreSQL analytics integration test | Row mapping and DDL are covered locally; a live database test can be added when the CI database fixture is standardized. |
+| Advanced seasonality and causal inference | Explicitly out of scope for this spec. |
 
 ## Latest Local Verification
 
@@ -111,12 +113,29 @@ Environment:
 ```text
 Virtual environment: .venv
 Python: 3.14.0
+Date: 2026-07-01
+```
+
+Focused analytics test suite:
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_analytics_performance.py \
+  tests/test_analytics_service.py \
+  tests/test_analytics_repository.py \
+  tests/test_analytics_worker.py
+```
+
+Result:
+
+```text
+15 passed in 0.07s
 ```
 
 Focused static check:
 
 ```bash
-.venv/bin/pyright tests/test_frontend_backend_flow.py
+.venv/bin/python -m pyright src/chatbi/analytics.py tests/test_analytics_performance.py
 ```
 
 Result:
@@ -125,46 +144,18 @@ Result:
 0 errors, 0 warnings, 0 informations
 ```
 
-Focused test suite:
+Frontend/static continuation check:
 
 ```bash
-.venv/bin/python -m pytest tests/test_frontend_backend_flow.py
+.venv/bin/python -m pytest \
+  tests/test_frontend_build_static.py \
+  tests/test_frontend_static_bootstrap.py \
+  tests/test_frontend_architecture_manifest.py \
+  tests/test_frontend_render_model.py
 ```
 
 Result:
 
 ```text
-2 passed, 1 warning
+21 passed in 0.16s
 ```
-
-Full static check:
-
-```bash
-.venv/bin/pyright
-```
-
-Result:
-
-```text
-0 errors, 0 warnings, 0 informations
-```
-
-Full test suite:
-
-```bash
-.venv/bin/python -m pytest
-```
-
-Result:
-
-```text
-252 passed, 1 warning
-```
-
-Known warning:
-
-```text
-StarletteDeprecationWarning from fastapi.testclient
-```
-
-This warning comes from the third-party FastAPI/TestClient stack and does not indicate a failing project test.

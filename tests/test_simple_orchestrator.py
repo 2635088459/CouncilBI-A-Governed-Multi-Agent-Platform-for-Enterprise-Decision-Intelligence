@@ -8,6 +8,7 @@ from chatbi.core.contracts import (
     AgentName,
     AgentStepStatus,
     ErrorCode,
+    GuardrailDecision,
     Locale,
     QueryAnswer,
     QueryHistoryStatus,
@@ -23,6 +24,7 @@ from chatbi.orchestration.routing import ExecutionPlan
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.orchestration.state import InMemoryOrchestrationStateStore, RequestStateStage
 from chatbi.orchestration.tracing import AgentStepTracer, InMemoryAgentTraceLog
+from chatbi.trace_events import TraceEventStatus
 
 
 class VerifierFailedExecutor(PlanExecutor):
@@ -88,6 +90,68 @@ def test_orchestrator_returns_structured_answer_for_valid_question() -> None:
     assert answer.answer_text
     assert answer.sql_text.startswith("SELECT ")
     assert answer.table_result.columns == ("month", "revenue")
+
+
+def test_orchestrator_writes_guardrail_audit_for_allowed_sql() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(make_request(), trace_id="trc_guardrail_audit_allow")
+    audit_record = orchestrator.guardrail_audit_log.get(answer.trace_id)
+
+    assert audit_record is not None
+    assert audit_record.trace_id == "trc_guardrail_audit_allow"
+    assert audit_record.user_id == "u_001"
+    assert audit_record.role is UserRole.BUSINESS_USER
+    assert audit_record.decision is GuardrailDecision.ALLOW
+    assert audit_record.original_sql == "SELECT month, revenue FROM revenue_by_month LIMIT 100"
+    assert audit_record.safe_sql is not None
+    assert audit_record.safe_sql.startswith("SELECT ")
+
+
+def test_orchestrator_writes_spec_trace_events_for_success() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(make_request(), trace_id="trc_orchestrator_trace_success")
+    events = orchestrator.trace_event_store.list_by_trace_id(answer.trace_id)
+
+    assert tuple(event.status for event in events) == (
+        TraceEventStatus.STARTED,
+        TraceEventStatus.SUCCEEDED,
+    )
+    assert events[0].service == "orchestrator"
+    assert events[0].span_name == "orchestration"
+    assert events[1].latency_ms is not None
+    assert events[1].latency_ms >= 0
+
+
+def test_orchestrator_writes_degraded_spec_trace_event_for_denied_sql() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(
+        make_request("DROP TABLE orders"),
+        trace_id="trc_orchestrator_trace_degraded",
+    )
+    events = orchestrator.trace_event_store.list_by_trace_id(answer.trace_id)
+
+    assert events[-1].status is TraceEventStatus.DEGRADED
+    assert events[-1].service == "orchestrator"
+
+
+def test_orchestrator_writes_guardrail_audit_for_denied_sql() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(
+        make_request("DROP TABLE orders"),
+        trace_id="trc_guardrail_audit_deny",
+    )
+    audit_record = orchestrator.guardrail_audit_log.get(answer.trace_id)
+
+    assert audit_record is not None
+    assert audit_record.trace_id == "trc_guardrail_audit_deny"
+    assert audit_record.decision is GuardrailDecision.DENY
+    assert audit_record.original_sql == "DROP TABLE orders"
+    assert audit_record.error_code is ErrorCode.SQL_DENY_STATEMENT
+    assert audit_record.message == "Only SELECT statements are allowed."
 
 
 def test_orchestrator_uses_readonly_query_executor_table_result_when_configured() -> None:

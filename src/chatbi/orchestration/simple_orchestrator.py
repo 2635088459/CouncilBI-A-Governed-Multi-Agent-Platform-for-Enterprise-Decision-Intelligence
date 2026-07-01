@@ -26,7 +26,8 @@ from chatbi.core.contracts import (
     WarningMessage,
     new_trace_id,
 )
-from chatbi.governance import ReadOnlyQueryResult
+from chatbi.governance import InMemoryGuardrailAuditLog, ReadOnlyQueryResult
+from chatbi.governance.audit import GuardrailAuditLog
 from chatbi.governance.simple_guardrail import SimpleSqlGuardrail
 from chatbi.history.in_memory import InMemoryQueryHistory
 from chatbi.knowledge import InMemoryKnowledgeStore
@@ -38,6 +39,7 @@ from chatbi.orchestration.executor import (
 )
 from chatbi.orchestration.routing import ExecutionPlanBuilder, QuestionClassifier
 from chatbi.orchestration.state import OrchestrationRequestState, RequestStateStage
+from chatbi.trace_events import InMemoryTraceEventStore, TraceEvent, TraceEventRecorder, TraceEventStatus
 
 
 def _is_str_tuple(value: object) -> TypeGuard[tuple[str, ...]]:
@@ -74,8 +76,11 @@ class SimpleOrchestrator:
         readonly_query_executor: ReadOnlyQueryRunner | None = None,
         readonly_database_url: str | None = None,
         analytics_service: AnalyticsService | None = None,
+        guardrail_audit_log: InMemoryGuardrailAuditLog | None = None,
+        trace_event_recorder: TraceEventRecorder | None = None,
     ) -> None:
-        self._guardrail = guardrail or SimpleSqlGuardrail()
+        self._guardrail_audit_log = guardrail_audit_log or InMemoryGuardrailAuditLog()
+        self._guardrail = guardrail or SimpleSqlGuardrail(audit_log=self._guardrail_audit_log)
         self._history = history or InMemoryQueryHistory()
         self._classifier = classifier or QuestionClassifier()
         self._plan_builder = plan_builder or ExecutionPlanBuilder()
@@ -87,14 +92,29 @@ class SimpleOrchestrator:
         self._analytics_service = analytics_service or AnalyticsService(
             InMemoryAnalyticsRepository()
         )
+        self._trace_event_recorder = trace_event_recorder or TraceEventRecorder(
+            service="orchestrator"
+        )
 
     @property
     def history(self) -> InMemoryQueryHistory:
         return self._history
 
+    @property
+    def guardrail_audit_log(self) -> GuardrailAuditLog:
+        return self._guardrail_audit_log
+
+    @property
+    def trace_event_store(self) -> InMemoryTraceEventStore:
+        return self._trace_event_recorder.store
+
     def answer(self, request: QueryRequest, trace_id: str | None = None) -> QueryAnswer:
         active_trace_id = trace_id or new_trace_id()
         started_at = perf_counter()
+        started_event = self._trace_event_recorder.start(
+            trace_id=active_trace_id,
+            span_name="orchestration",
+        )
         self._save_request_state(
             OrchestrationRequestState(
                 trace_id=active_trace_id,
@@ -134,6 +154,10 @@ class SimpleOrchestrator:
                     latency_ms=self._duration_ms(started_at),
                 )
             )
+            self._complete_orchestrator_trace_event(
+                started_event=started_event,
+                status=TraceEventStatus.FAILED,
+            )
             raise
 
         self._save_request_state(
@@ -142,6 +166,10 @@ class SimpleOrchestrator:
                 answer=answer,
                 latency_ms=self._duration_ms(started_at),
             )
+        )
+        self._complete_orchestrator_trace_event(
+            started_event=started_event,
+            status=self._trace_event_status_for_answer(answer),
         )
         return answer
 
@@ -215,6 +243,20 @@ class SimpleOrchestrator:
 
     def _duration_ms(self, started_at: float) -> int:
         return max(0, int((perf_counter() - started_at) * 1000))
+
+    def _complete_orchestrator_trace_event(
+        self,
+        started_event: TraceEvent,
+        status: TraceEventStatus,
+    ) -> None:
+        self._trace_event_recorder.complete(started_event, status=status)
+
+    def _trace_event_status_for_answer(self, answer: QueryAnswer) -> TraceEventStatus:
+        if self._sql_denial_from_answer(answer) is not None:
+            return TraceEventStatus.DEGRADED
+        if answer.warnings:
+            return TraceEventStatus.DEGRADED
+        return TraceEventStatus.SUCCEEDED
 
     def _request_state_from_answer(
         self,

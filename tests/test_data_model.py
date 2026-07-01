@@ -50,6 +50,9 @@ def test_data_model_includes_semantic_knowledge_runtime_and_cache_tables() -> No
         "agent_traces",
         "eval_runs",
     }
+    assert set(catalog.table_names_for_domain(DataDomain.ANALYTICS_RESULTS)) == {
+        "analytics.results",
+    }
     assert set(catalog.table_names_for_domain(DataDomain.CONFIG_CACHE)) == {
         "system_configs",
         "prompt_versions",
@@ -281,6 +284,28 @@ def test_guardrail_v2_audit_tables_store_hash_decision_rule_hits_and_latency() -
     assert sql_rule_hits.get_column("message") is not None
     assert ("audit_event_id",) in sql_rule_hits.indexes
     assert ("rule_code",) in sql_rule_hits.indexes
+
+
+def test_analytics_v2_results_table_persists_method_parameters_and_forecasts() -> None:
+    catalog = build_default_data_model_catalog()
+
+    results = catalog.get_table("analytics.results")
+
+    assert results is not None
+    assert results.domain is DataDomain.ANALYTICS_RESULTS
+    assert results.primary_key_columns == ("trace_id",)
+    assert results.get_column("metric_id") is not None
+    assert results.get_column("semantic_version_id") is not None
+    assert results.get_column("parameters") is not None
+    assert results.get_column("anomaly_points") is not None
+    assert results.get_column("forecast_points") is not None
+    assert results.get_column("confidence_interval") is not None
+    assert results.get_column("quality_warnings") is not None
+    assert results.get_column("method") is not None
+    assert results.get_column("model_version") is not None
+    assert ("metric_id",) in results.indexes
+    assert ("semantic_version_id",) in results.indexes
+    assert results.retention_days == 180
 
 
 def test_hot_audit_and_history_data_retention_is_at_least_180_days() -> None:

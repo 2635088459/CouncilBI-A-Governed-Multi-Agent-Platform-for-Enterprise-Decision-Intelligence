@@ -1,0 +1,74 @@
+name: Spec 10 Release Gate
+
+on:
+  pull_request:
+    paths:
+      - "src/chatbi/**"
+      - "tests/**"
+      - "spec/version2/10-evaluation-and-observability.spec.md"
+      - "verification/10-evaluation-and-observability-verification.md"
+      - ".github/workflows/spec-10-release-gate.yml"
+  workflow_dispatch:
+
+jobs:
+  spec-10-release-gate:
+    name: pyright -> pytest -> evaluation -> human acceptance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Pyright gate
+        run: |
+          python -m pyright \
+            src/chatbi/trace_events.py \
+            src/chatbi/runtime_metrics.py \
+            src/chatbi/observability_logs.py \
+            src/chatbi/evaluation_repository.py \
+            src/chatbi/evaluation_cases.py \
+            src/chatbi/evaluation_report.py \
+            src/chatbi/release_gate.py \
+            src/chatbi/release_gate_ci.py \
+            src/chatbi/human_acceptance.py \
+            src/chatbi/trace_benchmark.py \
+            src/chatbi/evaluation_benchmark.py \
+            src/chatbi/evaluation_observability_v2.py
+
+      - name: Pytest gate
+        run: |
+          python -m pytest \
+            tests/test_trace_events.py \
+            tests/test_runtime_metrics.py \
+            tests/test_runtime_probes.py \
+            tests/test_observability_logs.py \
+            tests/test_evaluation_repository.py \
+            tests/test_evaluation_cases.py \
+            tests/test_evaluation_report.py \
+            tests/test_simple_orchestrator.py \
+            tests/test_app.py
+
+      - name: Evaluation gate
+        run: |
+          python -m pytest \
+            tests/test_release_gate.py \
+            tests/test_release_gate_ci.py \
+            tests/test_trace_benchmark.py \
+            tests/test_evaluation_benchmark.py
+
+      - name: Human acceptance checklist
+        run: |
+          echo "Machine gates passed."
+          echo "Reviewer must inspect one successful example for usability and business correctness."
+          echo "Checklist source: verification/10-evaluation-and-observability-verification.md"
+          echo "Spec source: spec/version2/10-evaluation-and-observability.spec.md"

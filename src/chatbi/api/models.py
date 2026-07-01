@@ -28,6 +28,7 @@ from chatbi.core.contracts import (
     WarningMessage,
 )
 from chatbi.observability import AlertEvent, ObservabilitySpan, SloStatus, TraceReplay
+from chatbi.trace_events import TraceEvent
 
 
 def utc_now_iso() -> str:
@@ -133,6 +134,17 @@ class ObservabilitySpanPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceEventPayload:
+    trace_id: str
+    service: str
+    span_name: str
+    status: str
+    started_at: str
+    ended_at: str | None
+    latency_ms: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class ObservabilityTracePayload:
     trace_id: str
     completed: bool
@@ -228,7 +240,10 @@ class ReleaseGateSummaryPayload:
     eval_run_id: str
     eval_suite_id: str
     overall_score: float
+    total_cases: int
+    failed_cases: int
     release_gate_passed: bool
+    eval_report_path: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,6 +385,18 @@ def observability_span_payload(span: ObservabilitySpan) -> ObservabilitySpanPayl
     )
 
 
+def trace_event_payload(event: TraceEvent) -> TraceEventPayload:
+    return TraceEventPayload(
+        trace_id=event.trace_id,
+        service=event.service,
+        span_name=event.span_name,
+        status=event.status.value,
+        started_at=event.started_at.isoformat(),
+        ended_at=event.ended_at.isoformat() if event.ended_at is not None else None,
+        latency_ms=event.latency_ms,
+    )
+
+
 def observability_trace_payload(replay: TraceReplay) -> ObservabilityTracePayload:
     return ObservabilityTracePayload(
         trace_id=replay.trace_id,
@@ -409,7 +436,10 @@ def release_gate_summary_payload(
         eval_run_id=result.eval_run_id,
         eval_suite_id=result.eval_suite_id,
         overall_score=result.overall_score,
+        total_cases=result.total_cases,
+        failed_cases=result.failed_cases,
         release_gate_passed=result.release_gate_passed,
+        eval_report_path=f"/api/v1/evals/{result.eval_run_id}",
     )
 
 

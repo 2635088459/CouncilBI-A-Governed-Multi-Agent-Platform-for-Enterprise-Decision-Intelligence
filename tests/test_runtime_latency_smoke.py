@@ -21,7 +21,7 @@ def timed_call(action: Callable[[], None]) -> float:
     return (perf_counter() - started_at) * 1000
 
 
-def test_healthz_and_readyz_p99_latency_smoke() -> None:
+def test_healthz_readyz_and_metrics_p99_latency_smoke() -> None:
     app = create_app(
         runtime_config=RuntimeConfig(
             database_url="postgresql://chatbi:test@localhost:5432/chatbi",
@@ -33,6 +33,7 @@ def test_healthz_and_readyz_p99_latency_smoke() -> None:
 
     health_latencies: list[float] = []
     ready_latencies: list[float] = []
+    metrics_latencies: list[float] = []
     for _ in range(100):
         health_latencies.append(
             timed_call(lambda: _assert_ok(client.get("/healthz").status_code))
@@ -40,9 +41,13 @@ def test_healthz_and_readyz_p99_latency_smoke() -> None:
         ready_latencies.append(
             timed_call(lambda: _assert_ok(client.get("/readyz").status_code))
         )
+        metrics_latencies.append(
+            timed_call(lambda: _assert_ok(client.get("/metrics").status_code))
+        )
 
     assert percentile(health_latencies, 0.99) <= 100.0
     assert percentile(ready_latencies, 0.99) <= 100.0
+    assert percentile(metrics_latencies, 0.99) <= 100.0
 
 
 def test_v2_chat_query_p95_latency_smoke_under_concurrency() -> None:

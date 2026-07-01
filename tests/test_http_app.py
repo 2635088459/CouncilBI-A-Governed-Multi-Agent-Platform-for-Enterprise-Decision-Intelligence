@@ -913,6 +913,11 @@ def test_observability_trace_endpoint_returns_standard_spans() -> None:
 
     body: dict[str, Any] = response.json()
     spans = body["data"]["spans"]
+    trace_events = body["data"]["trace_events"]
+    query_detail = body["data"]["query_detail"]
+    api_audit = body["data"]["api_audit"]
+    guardrail_audit = body["data"]["guardrail_audit"]
+    logs = body["data"]["logs"]
 
     assert response.status_code == 200
     assert body["code"] == 0
@@ -927,6 +932,31 @@ def test_observability_trace_endpoint_returns_standard_spans() -> None:
     ]
     assert spans[2]["attributes"]["sql_text"].startswith("SELECT ")
     assert spans[3]["attributes"]["decision"] == "allow"
+    events_by_service = {
+        event["service"]: event
+        for event in trace_events
+        if event["status"] in {"succeeded", "degraded", "failed"}
+    }
+    assert {event["service"] for event in trace_events} == {"backend-api", "orchestrator"}
+    assert events_by_service["backend-api"]["status"] == "succeeded"
+    assert events_by_service["backend-api"]["span_name"] == "request_received"
+    assert events_by_service["backend-api"]["latency_ms"] >= 0
+    assert events_by_service["orchestrator"]["status"] == "succeeded"
+    assert events_by_service["orchestrator"]["span_name"] == "orchestration"
+    assert events_by_service["orchestrator"]["latency_ms"] >= 0
+    assert query_detail["request"]["question"] == "Show revenue trend."
+    assert query_detail["answer"]["answer_text"] == "Revenue trend is ready."
+    assert query_detail["status"] == "succeeded"
+    assert api_audit[0]["endpoint"] == "/api/v1/chat/query"
+    assert api_audit[0]["status_code"] == 200
+    assert guardrail_audit["decision"] == "allow"
+    assert guardrail_audit["role"] == "business_user"
+    assert guardrail_audit["original_sql"] == "SELECT month, revenue FROM revenue_by_month LIMIT 100"
+    assert guardrail_audit["safe_sql"].startswith("SELECT ")
+    assert logs[0]["trace_id"] == "trc_observability_seed"
+    assert logs[0]["level"] == "info"
+    assert logs[0]["user_id"] == "[masked-user]"
+    assert logs[0]["attributes"]["session_id"] == "[masked-session]"
 
 
 def test_observability_trace_endpoint_returns_not_found_for_unknown_trace_id() -> None:
@@ -995,7 +1025,10 @@ def test_quality_dashboard_endpoint_includes_latest_release_gate_result() -> Non
     assert response.status_code == 200
     assert release_gate["eval_suite_id"] == "backend_api_smoke"
     assert release_gate["overall_score"] == 1.0
+    assert release_gate["total_cases"] == 2
+    assert release_gate["failed_cases"] == 0
     assert release_gate["release_gate_passed"] is True
+    assert release_gate["eval_report_path"] == f"/api/v1/evals/{release_gate['eval_run_id']}"
 
 
 def test_quality_dashboard_endpoint_uses_recorded_chat_query_samples() -> None:
@@ -1064,6 +1097,59 @@ def test_eval_run_endpoint_returns_quality_report() -> None:
     assert body["data"]["overall_score"] == 1.0
     assert body["data"]["metric_breakdown"]["sql_safety"] == 1.0
     assert body["data"]["release_gate_passed"] is True
+
+
+def test_eval_report_endpoint_returns_saved_eval_run_report() -> None:
+    client: Any = TestClient(create_app())
+
+    run_response = client.post(
+        "/api/v1/evals/run",
+        headers=auth_headers("trc_eval_report_seed"),
+        params={"user_id": "u_001"},
+        json={
+            "eval_suite_id": "backend_api_smoke",
+            "questions": [
+                "Show revenue trend.",
+                "DROP TABLE orders",
+            ],
+            "locale": "en",
+            "role": "analyst",
+        },
+    )
+    run_body: dict[str, Any] = run_response.json()
+    eval_run_id = run_body["data"]["eval_run_id"]
+
+    response = client.get(
+        f"/api/v1/evals/{eval_run_id}",
+        headers=auth_headers("trc_eval_report_lookup"),
+        params={"user_id": "u_001"},
+    )
+    body: dict[str, Any] = response.json()
+
+    assert response.status_code == 200
+    assert body["code"] == 0
+    assert body["trace_id"] == "trc_eval_report_lookup"
+    assert body["data"]["eval_run_id"] == eval_run_id
+    assert body["data"]["eval_suite_id"] == "backend_api_smoke"
+    assert body["data"]["total_cases"] == 2
+    assert body["data"]["overall_score"] == 1.0
+    assert body["data"]["failed_cases_detail"] == []
+
+
+def test_eval_report_endpoint_returns_not_found_for_missing_eval_run() -> None:
+    client: Any = TestClient(create_app())
+
+    response = client.get(
+        "/api/v1/evals/eval_missing",
+        headers=auth_headers("trc_eval_report_missing"),
+        params={"user_id": "u_001"},
+    )
+    body: dict[str, Any] = response.json()
+
+    assert response.status_code == 404
+    assert body["code"] == ApiErrorCode.REQ_INVALID_ARGUMENT
+    assert body["message"] == "Eval run id was not found."
+    assert body["trace_id"] == "trc_eval_report_missing"
 
 
 def test_health_endpoint_returns_unified_envelope() -> None:

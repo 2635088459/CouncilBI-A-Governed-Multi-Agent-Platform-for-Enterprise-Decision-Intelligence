@@ -1,9 +1,12 @@
+from datetime import datetime, timezone
+
 from chatbi.api.models import (
     EvalRunResultPayload,
     ChatQueryRequestPayload,
     observability_span_payload,
     quality_dashboard_payload,
     success_envelope,
+    trace_event_payload,
     to_chat_query_response,
 )
 from chatbi.core.contracts import (
@@ -23,6 +26,7 @@ from chatbi.observability import (
     TraceSpanName,
     TraceSpanStatus,
 )
+from chatbi.trace_events import TraceEvent, TraceEventStatus
 
 
 def test_chat_query_request_payload_converts_to_domain_request() -> None:
@@ -145,6 +149,28 @@ def test_observability_span_payload_is_json_friendly() -> None:
     assert payload.attributes["sql_text"] == "SELECT 1"
 
 
+def test_trace_event_payload_is_json_friendly() -> None:
+    started_at = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    event = TraceEvent(
+        trace_id="trc_event_payload",
+        service="backend-api",
+        span_name="request_received",
+        status=TraceEventStatus.SUCCEEDED,
+        started_at=started_at,
+        ended_at=started_at,
+        latency_ms=0,
+    )
+
+    payload = trace_event_payload(event)
+
+    assert payload.trace_id == "trc_event_payload"
+    assert payload.service == "backend-api"
+    assert payload.status == "succeeded"
+    assert payload.started_at == "2026-07-01T12:00:00+00:00"
+    assert payload.ended_at == "2026-07-01T12:00:00+00:00"
+    assert payload.latency_ms == 0
+
+
 def test_quality_dashboard_payload_includes_slo_and_release_gate_summary() -> None:
     dashboard = quality_dashboard_payload(
         slo_statuses=(
@@ -178,4 +204,7 @@ def test_quality_dashboard_payload_includes_slo_and_release_gate_summary() -> No
     assert dashboard.alerts == ()
     assert dashboard.release_gate is not None
     assert dashboard.release_gate["eval_run_id"] == "eval_001"
+    assert dashboard.release_gate["total_cases"] == 2
+    assert dashboard.release_gate["failed_cases"] == 0
     assert dashboard.release_gate["release_gate_passed"] is True
+    assert dashboard.release_gate["eval_report_path"] == "/api/v1/evals/eval_001"

@@ -16,6 +16,7 @@ class DataDomain(StrEnum):
     SEMANTIC_GOVERNANCE = "semantic_governance"
     KNOWLEDGE_RETRIEVAL = "knowledge_retrieval"
     RUNTIME_GOVERNANCE = "runtime_governance"
+    ANALYTICS_RESULTS = "analytics_results"
     CONFIG_CACHE = "config_cache"
 
 
@@ -235,6 +236,7 @@ def build_default_data_model_catalog() -> DataModelCatalog:
             *_build_semantic_governance_tables(),
             *_build_knowledge_retrieval_tables(),
             *_build_runtime_governance_tables(),
+            *_build_analytics_result_tables(),
             *_build_config_cache_tables(),
         ),
         metrics=_build_core_metrics(),
@@ -662,6 +664,32 @@ def _build_runtime_governance_tables() -> tuple[TableDefinition, ...]:
                 ColumnDefinition("score", "decimal", nullable=False),
                 ColumnDefinition("created_at", "datetime", nullable=False),
             ),
+        ),
+    )
+
+
+def _build_analytics_result_tables() -> tuple[TableDefinition, ...]:
+    return (
+        TableDefinition(
+            name="analytics.results",
+            domain=DataDomain.ANALYTICS_RESULTS,
+            retention_days=180,
+            columns=(
+                ColumnDefinition("trace_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("metric_id", "string", nullable=False),
+                ColumnDefinition("semantic_version_id", "string", nullable=False),
+                ColumnDefinition("parameters", "json", nullable=False),
+                ColumnDefinition("anomaly_points", "json", nullable=False),
+                ColumnDefinition("forecast_points", "json", nullable=False),
+                ColumnDefinition("confidence_interval", "json"),
+                ColumnDefinition("quality_warnings", "string[]", nullable=False),
+                ColumnDefinition("method", "string", nullable=False),
+                ColumnDefinition("model_version", "string", nullable=False),
+                ColumnDefinition("explanation", "text", nullable=False),
+                ColumnDefinition("created_at", "datetime", nullable=False),
+            ),
+            indexes=(("metric_id",), ("semantic_version_id",), ("created_at",)),
+            quality_rules=(_retention_rule(180),),
         ),
     )
 
