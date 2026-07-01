@@ -4,6 +4,8 @@
 
 This document is based on the main README and lists all system parts that require dedicated design work. It serves as the master checklist for architecture design, module design, API design, data design, and evaluation design. The repository now includes v2 engineering upgrade documents that move the initial framework toward database connectivity, Docker-based local development, frontend/backend integration, Kubernetes deployment, and observable runtime operations.
 
+The final industrial submission design has been added under [final-version/README.md](final-version/README.md). The English version is available at [final-version/en/README.en.md](final-version/en/README.en.md), and the Chinese version is available at [final-version/zh-CN/README.zh-CN.md](final-version/zh-CN/README.zh-CN.md). This document set extends the engineering MVP into a final architecture blueprint suitable for director-level review and cloud deployment planning.
+
 The project is positioned as an enterprise decision-intelligence, multi-agent ChatBI platform. Therefore, the design scope should cover not only chat interaction, but also data governance, security governance, explainability, evaluation, observability, and engineering delivery.
 
 ---
@@ -46,7 +48,36 @@ v2 document entry points:
 9. Analytics and Forecasting v2: [English](09-analytics-and-forecasting-design/VERSION2.en.md) / [Chinese](09-analytics-and-forecasting-design/VERSION2.zh-CN.md)
 10. Evaluation and Observability v2: [English](10-evaluation-and-observability/VERSION2.en.md) / [Chinese](10-evaluation-and-observability/VERSION2.zh-CN.md)
 
-### 2.2 Overall Architecture Diagram
+### 2.2 Final Version Scope
+
+The Final Version design does not replace the v2 documents. It adds the cross-cutting production capabilities required for an industrial submission:
+
+1. User sign-up, sign-in, token/session handling, and password safety.
+2. RBAC, admin-only APIs, and tenant isolation.
+3. Real LLM API integration, LLM Provider Gateway, token/cost tracking.
+4. Embeddings, vector database, RAG citations, and document permission filters.
+5. Database migrations, small/medium/large seed data, and load-test data.
+6. Kubernetes, managed cloud databases, secrets, ingress, TLS, and HPA.
+7. Timeouts, retries, circuit breakers, rate limits, queues, and load testing.
+8. Admin console, audit events, security observability, and OpenTelemetry/Prometheus/Grafana integration.
+9. Final delivery roadmap, acceptance criteria, and go-live checklist.
+
+Final Version document entry points:
+
+1. Language index: [English/Chinese](final-version/README.md)
+2. Master index: [English](final-version/en/README.en.md) / [Chinese](final-version/zh-CN/README.zh-CN.md)
+3. Executive system design: [English](final-version/en/00-executive-system-design.en.md) / [Chinese](final-version/zh-CN/00-executive-system-design.zh-CN.md)
+4. Production architecture: [English](final-version/en/01-production-architecture.en.md) / [Chinese](final-version/zh-CN/01-production-architecture.zh-CN.md)
+5. Auth, RBAC, and tenant isolation: [English](final-version/en/02-auth-rbac-tenant-isolation.en.md) / [Chinese](final-version/zh-CN/02-auth-rbac-tenant-isolation.zh-CN.md)
+6. LLM Provider Gateway: [English](final-version/en/03-llm-provider-gateway.en.md) / [Chinese](final-version/zh-CN/03-llm-provider-gateway.zh-CN.md)
+7. Embedding, vector database, and RAG: [English](final-version/en/04-embedding-vector-rag.en.md) / [Chinese](final-version/zh-CN/04-embedding-vector-rag.zh-CN.md)
+8. Data platform, migrations, and seed data: [English](final-version/en/05-data-platform-and-seed.en.md) / [Chinese](final-version/zh-CN/05-data-platform-and-seed.zh-CN.md)
+9. Cloud and Kubernetes deployment: [English](final-version/en/06-cloud-kubernetes-deployment.en.md) / [Chinese](final-version/zh-CN/06-cloud-kubernetes-deployment.zh-CN.md)
+10. Resilience, rate limiting, and scale: [English](final-version/en/07-resilience-and-scale.en.md) / [Chinese](final-version/zh-CN/07-resilience-and-scale.zh-CN.md)
+11. Security, observability, and admin console: [English](final-version/en/08-security-observability-admin.en.md) / [Chinese](final-version/zh-CN/08-security-observability-admin.zh-CN.md)
+12. Final delivery roadmap: [English](final-version/en/09-final-delivery-roadmap.en.md) / [Chinese](final-version/zh-CN/09-final-delivery-roadmap.zh-CN.md)
+
+### 2.3 Overall Architecture Diagram
 
 ```mermaid
 flowchart TB

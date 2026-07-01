@@ -4,9 +4,12 @@
 
 This page is the single entry point to the full 10-part system design set for the Governed Multi-Agent ChatBI Platform. The v1 documents remain as detailed design baselines, and the v2 engineering upgrade documents add database integration, Docker-based local development, frontend/backend integration, Kubernetes deployment, and observability.
 
+The final industrial submission design is now collected under [final-version/README.md](final-version/README.md). The English version is available at [final-version/en/README.en.md](final-version/en/README.en.md), and the Chinese version is available at [final-version/zh-CN/README.zh-CN.md](final-version/zh-CN/README.zh-CN.md). It covers Auth/RBAC, tenant isolation, real LLM APIs, embeddings/vector search, admin-only observability, Kubernetes, resilience, load testing, and the final delivery roadmap.
+
 ## Table of Contents
 
 - [Global Architecture Diagram](#global-architecture-diagram)
+- [Final Version Design Entry Points](#final-version-design-entry-points)
 - [How to Use This Index](#how-to-use-this-index)
 - [Architecture Layer](#architecture-layer)
 - [Data and Governance Layer](#data-and-governance-layer)
@@ -53,6 +56,22 @@ flowchart TB
 - 08 RAG Retrieval and Evidence v2: [English](08-rag-design/VERSION2.en.md) / [Chinese](08-rag-design/VERSION2.zh-CN.md)
 - 09 Analytics and Forecasting v2: [English](09-analytics-and-forecasting-design/VERSION2.en.md) / [Chinese](09-analytics-and-forecasting-design/VERSION2.zh-CN.md)
 - 10 Evaluation and Observability v2: [English](10-evaluation-and-observability/VERSION2.en.md) / [Chinese](10-evaluation-and-observability/VERSION2.zh-CN.md)
+
+## Final Version Design Entry Points
+
+- Language index: [Final Version System Design](final-version/README.md)
+- English master index: [Final Version System Design Index](final-version/en/README.en.md)
+- Chinese master index: [Final Version 系统设计总目录](final-version/zh-CN/README.zh-CN.md)
+- 00 Executive system design: [English](final-version/en/00-executive-system-design.en.md) / [Chinese](final-version/zh-CN/00-executive-system-design.zh-CN.md)
+- 01 Production architecture: [English](final-version/en/01-production-architecture.en.md) / [Chinese](final-version/zh-CN/01-production-architecture.zh-CN.md)
+- 02 Auth, RBAC, and tenant isolation: [English](final-version/en/02-auth-rbac-tenant-isolation.en.md) / [Chinese](final-version/zh-CN/02-auth-rbac-tenant-isolation.zh-CN.md)
+- 03 LLM Provider Gateway: [English](final-version/en/03-llm-provider-gateway.en.md) / [Chinese](final-version/zh-CN/03-llm-provider-gateway.zh-CN.md)
+- 04 Embedding, vector database, and RAG: [English](final-version/en/04-embedding-vector-rag.en.md) / [Chinese](final-version/zh-CN/04-embedding-vector-rag.zh-CN.md)
+- 05 Data platform, migrations, and seed data: [English](final-version/en/05-data-platform-and-seed.en.md) / [Chinese](final-version/zh-CN/05-data-platform-and-seed.zh-CN.md)
+- 06 Cloud and Kubernetes deployment: [English](final-version/en/06-cloud-kubernetes-deployment.en.md) / [Chinese](final-version/zh-CN/06-cloud-kubernetes-deployment.zh-CN.md)
+- 07 Resilience, rate limiting, and scale: [English](final-version/en/07-resilience-and-scale.en.md) / [Chinese](final-version/zh-CN/07-resilience-and-scale.zh-CN.md)
+- 08 Security, observability, and admin console: [English](final-version/en/08-security-observability-admin.en.md) / [Chinese](final-version/zh-CN/08-security-observability-admin.zh-CN.md)
+- 09 Final delivery roadmap: [English](final-version/en/09-final-delivery-roadmap.en.md) / [Chinese](final-version/zh-CN/09-final-delivery-roadmap.zh-CN.md)
 
 ## How to Use This Index
 

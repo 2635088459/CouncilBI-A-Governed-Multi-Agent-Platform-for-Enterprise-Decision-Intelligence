@@ -4,9 +4,12 @@ English Index: [system-design-index.en.md](system-design-index.en.md)
 
 本页是 Governed Multi-Agent ChatBI Platform 10 份系统设计文档的统一入口。每个目录保留 v1 详细设计，并新增 v2 工程化升级设计，覆盖数据库接入、Docker、本地前后端联调、Kubernetes 部署与可观测性。
 
+最终提交版系统设计已单独整理到 [final-version/README.md](final-version/README.md)。中文版位于 [final-version/zh-CN/README.zh-CN.md](final-version/zh-CN/README.zh-CN.md)，英文版位于 [final-version/en/README.en.md](final-version/en/README.en.md)。这套文档面向工业级提交和云端上线规划，覆盖 Auth/RBAC、多租户隔离、真实 LLM API、Embedding/向量数据库、Admin 可观测性、Kubernetes、熔断限流、压测与最终交付路线图。
+
 ## 目录
 
 - [全局架构图](#全局架构图)
+- [Final Version 设计入口](#final-version-设计入口)
 - [使用说明](#使用说明)
 - [架构层](#架构层)
 - [数据与治理层](#数据与治理层)
@@ -53,6 +56,22 @@ flowchart TB
 - 08 RAG 检索与证据解释 v2：[中文](08-rag-design/VERSION2.zh-CN.md) / [English](08-rag-design/VERSION2.en.md)
 - 09 分析与预测 v2：[中文](09-analytics-and-forecasting-design/VERSION2.zh-CN.md) / [English](09-analytics-and-forecasting-design/VERSION2.en.md)
 - 10 评估与可观测性 v2：[中文](10-evaluation-and-observability/VERSION2.zh-CN.md) / [English](10-evaluation-and-observability/VERSION2.en.md)
+
+## Final Version 设计入口
+
+- 语言入口：[Final Version System Design](final-version/README.md)
+- 中文总目录：[Final Version 系统设计总目录](final-version/zh-CN/README.zh-CN.md)
+- 英文总目录：[Final Version System Design Index](final-version/en/README.en.md)
+- 00 总体提交版系统设计：[中文](final-version/zh-CN/00-executive-system-design.zh-CN.md) / [English](final-version/en/00-executive-system-design.en.md)
+- 01 生产级总体架构：[中文](final-version/zh-CN/01-production-architecture.zh-CN.md) / [English](final-version/en/01-production-architecture.en.md)
+- 02 登录、注册、RBAC 与租户隔离：[中文](final-version/zh-CN/02-auth-rbac-tenant-isolation.zh-CN.md) / [English](final-version/en/02-auth-rbac-tenant-isolation.en.md)
+- 03 大模型 Provider Gateway：[中文](final-version/zh-CN/03-llm-provider-gateway.zh-CN.md) / [English](final-version/en/03-llm-provider-gateway.en.md)
+- 04 Embedding、向量数据库与 RAG：[中文](final-version/zh-CN/04-embedding-vector-rag.zh-CN.md) / [English](final-version/en/04-embedding-vector-rag.en.md)
+- 05 数据平台、迁移与大规模测试数据：[中文](final-version/zh-CN/05-data-platform-and-seed.zh-CN.md) / [English](final-version/en/05-data-platform-and-seed.en.md)
+- 06 云端与 Kubernetes 部署：[中文](final-version/zh-CN/06-cloud-kubernetes-deployment.zh-CN.md) / [English](final-version/en/06-cloud-kubernetes-deployment.en.md)
+- 07 熔断、限流、抗压与高可用：[中文](final-version/zh-CN/07-resilience-and-scale.zh-CN.md) / [English](final-version/en/07-resilience-and-scale.en.md)
+- 08 安全、可观测性与 Admin 控制台：[中文](final-version/zh-CN/08-security-observability-admin.zh-CN.md) / [English](final-version/en/08-security-observability-admin.en.md)
+- 09 最终交付路线图：[中文](final-version/zh-CN/09-final-delivery-roadmap.zh-CN.md) / [English](final-version/en/09-final-delivery-roadmap.en.md)
 
 ## 使用说明
 

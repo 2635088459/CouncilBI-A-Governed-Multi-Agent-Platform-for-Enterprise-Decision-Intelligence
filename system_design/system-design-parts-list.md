@@ -4,6 +4,8 @@
 
 本文档基于主 README，列出本项目中所有需要单独进行系统设计的部分，作为后续架构设计、模块设计、接口设计、数据设计和评估设计的总清单。当前仓库已新增 v2 工程化升级设计，用于把初版逻辑框架推进到数据库连接、Docker、本地前后端联调、Kubernetes 部署和可观测运行。
 
+最终提交版系统设计已新增到 [final-version/README.md](final-version/README.md)。中文版位于 [final-version/zh-CN/README.zh-CN.md](final-version/zh-CN/README.zh-CN.md)，英文版位于 [final-version/en/README.en.md](final-version/en/README.en.md)。这套文档把项目从“工程化 MVP”继续推进到“可提交总监评审、可规划云端上线”的最终蓝图。
+
 项目定位是一个面向企业决策智能的多智能体 ChatBI 平台，因此设计范围不能只覆盖“聊天问答”，还需要覆盖数据治理、安全治理、可解释性、评估、可观测性和工程落地。
 
 ---
@@ -46,7 +48,36 @@ v2 文档入口：
 9. 分析与预测 v2：[中文](09-analytics-and-forecasting-design/VERSION2.zh-CN.md) / [English](09-analytics-and-forecasting-design/VERSION2.en.md)
 10. 评估与可观测性 v2：[中文](10-evaluation-and-observability/VERSION2.zh-CN.md) / [English](10-evaluation-and-observability/VERSION2.en.md)
 
-### 2.2 总体架构图
+### 2.2 Final Version 最终提交版范围
+
+Final Version 设计不替代 v2 文档，而是在 v2 之上补齐最终上线需要的横向能力：
+
+1. 用户注册、登录、token/session、密码安全。
+2. RBAC、Admin-only API、多租户数据隔离。
+3. 真实大模型 API 接入、LLM Provider Gateway、token/cost 统计。
+4. Embedding、向量数据库、RAG citation 和文档权限过滤。
+5. 数据库 migration、small/medium/large seed 数据、压测数据。
+6. Kubernetes、云端托管数据库、Secret、Ingress、TLS、HPA。
+7. timeout、retry、circuit breaker、rate limit、queue、load test。
+8. Admin 控制台、审计、安全事件、OpenTelemetry/Prometheus/Grafana 对接。
+9. 最终交付路线图、验收标准、上线前检查清单。
+
+Final Version 文档入口：
+
+1. 语言入口：[中文/English](final-version/README.md)
+2. 总目录：[中文](final-version/zh-CN/README.zh-CN.md) / [English](final-version/en/README.en.md)
+3. 总体提交版系统设计：[中文](final-version/zh-CN/00-executive-system-design.zh-CN.md) / [English](final-version/en/00-executive-system-design.en.md)
+4. 生产级总体架构：[中文](final-version/zh-CN/01-production-architecture.zh-CN.md) / [English](final-version/en/01-production-architecture.en.md)
+5. 登录、注册、RBAC 与租户隔离：[中文](final-version/zh-CN/02-auth-rbac-tenant-isolation.zh-CN.md) / [English](final-version/en/02-auth-rbac-tenant-isolation.en.md)
+6. 大模型 Provider Gateway：[中文](final-version/zh-CN/03-llm-provider-gateway.zh-CN.md) / [English](final-version/en/03-llm-provider-gateway.en.md)
+7. Embedding、向量数据库与 RAG：[中文](final-version/zh-CN/04-embedding-vector-rag.zh-CN.md) / [English](final-version/en/04-embedding-vector-rag.en.md)
+8. 数据平台、迁移与大规模测试数据：[中文](final-version/zh-CN/05-data-platform-and-seed.zh-CN.md) / [English](final-version/en/05-data-platform-and-seed.en.md)
+9. 云端与 Kubernetes 部署：[中文](final-version/zh-CN/06-cloud-kubernetes-deployment.zh-CN.md) / [English](final-version/en/06-cloud-kubernetes-deployment.en.md)
+10. 熔断、限流、抗压与高可用：[中文](final-version/zh-CN/07-resilience-and-scale.zh-CN.md) / [English](final-version/en/07-resilience-and-scale.en.md)
+11. 安全、可观测性与 Admin 控制台：[中文](final-version/zh-CN/08-security-observability-admin.zh-CN.md) / [English](final-version/en/08-security-observability-admin.en.md)
+12. 最终交付路线图：[中文](final-version/zh-CN/09-final-delivery-roadmap.zh-CN.md) / [English](final-version/en/09-final-delivery-roadmap.en.md)
+
+### 2.3 总体架构图
 
 ```mermaid
 flowchart TB
