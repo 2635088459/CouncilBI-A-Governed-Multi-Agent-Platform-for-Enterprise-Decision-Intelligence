@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS chatbi_request_metadata (
     status TEXT NOT NULL CHECK (status IN ('accepted', 'succeeded', 'failed')),
     accepted_at TIMESTAMPTZ NOT NULL,
     finished_at TIMESTAMPTZ NULL,
-    error_code TEXT NULL
+    error_code TEXT NULL,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
 
 CREATE INDEX IF NOT EXISTS idx_chatbi_request_metadata_request_id
@@ -47,6 +48,9 @@ CREATE INDEX IF NOT EXISTS idx_chatbi_request_metadata_request_id
 
 CREATE INDEX IF NOT EXISTS idx_chatbi_request_metadata_user_session
     ON chatbi_request_metadata (user_id, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_chatbi_request_metadata_org_trace
+    ON chatbi_request_metadata (org_id, trace_id);
 """.strip()
 
 
@@ -122,6 +126,7 @@ class RequestMetadataRecord:
     role: UserRole
     locale: Locale
     question: str
+    org_id: str = "org_legacy"
     status: RequestFinalStatus = RequestFinalStatus.ACCEPTED
     accepted_at: datetime = field(default_factory=utc_now)
     finished_at: datetime | None = None
@@ -194,6 +199,7 @@ class PostgresRequestMetadataStore:
         "accepted_at",
         "finished_at",
         "error_code",
+        "org_id",
     )
 
     def __init__(self, connection: RequestMetadataConnection) -> None:
@@ -219,9 +225,10 @@ class PostgresRequestMetadataStore:
                 status,
                 accepted_at,
                 finished_at,
-                error_code
+                error_code,
+                org_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (trace_id) DO UPDATE SET
                 request_id = EXCLUDED.request_id,
                 session_id = EXCLUDED.session_id,
@@ -232,7 +239,8 @@ class PostgresRequestMetadataStore:
                 status = EXCLUDED.status,
                 accepted_at = EXCLUDED.accepted_at,
                 finished_at = EXCLUDED.finished_at,
-                error_code = EXCLUDED.error_code
+                error_code = EXCLUDED.error_code,
+                org_id = EXCLUDED.org_id
             """,
             self._record_params(record),
         )
@@ -302,10 +310,11 @@ class PostgresRequestMetadataStore:
             record.accepted_at,
             record.finished_at,
             record.error_code,
+            record.org_id,
         )
 
     def _row_to_record(self, row: Sequence[object]) -> RequestMetadataRecord:
-        if len(row) != len(self._columns):
+        if len(row) not in {len(self._columns), len(self._columns) - 1}:
             raise ValueError("request metadata row has unexpected column count.")
         return RequestMetadataRecord(
             trace_id=cast(str, row[0]),
@@ -319,6 +328,7 @@ class PostgresRequestMetadataStore:
             accepted_at=cast(datetime, row[8]),
             finished_at=cast(datetime | None, row[9]),
             error_code=cast(str | None, row[10]),
+            org_id=cast(str, row[11]) if len(row) == len(self._columns) else "org_legacy",
         )
 
 

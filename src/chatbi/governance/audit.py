@@ -17,6 +17,7 @@ SQL_RULE_HITS_TABLE = "sql_rule_hits"
 QUERY_AUDIT_EVENTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS query_audit_events (
     audit_event_id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy',
     trace_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     role TEXT NOT NULL,
@@ -27,6 +28,8 @@ CREATE TABLE IF NOT EXISTS query_audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_query_audit_events_trace_id
     ON query_audit_events(trace_id);
+CREATE INDEX IF NOT EXISTS idx_query_audit_events_org_trace_id
+    ON query_audit_events(org_id, trace_id);
 CREATE INDEX IF NOT EXISTS idx_query_audit_events_sql_hash
     ON query_audit_events(sql_hash);
 CREATE INDEX IF NOT EXISTS idx_query_audit_events_decision
@@ -111,6 +114,7 @@ class GuardrailAuditRecordV2:
     decision: GuardrailDecisionStatus
     rule_hits: tuple[RuleHit, ...]
     latency_ms: int
+    org_id: str = "org_legacy"
     audit_event_id: str = field(default_factory=new_audit_event_id)
     occurred_at: datetime = field(default_factory=utc_now)
 
@@ -125,6 +129,8 @@ class GuardrailAuditRecordV2:
             raise ValueError("sql_hash is required")
         if self.latency_ms < 0:
             raise ValueError("latency_ms must be greater than or equal to 0")
+        if not self.org_id.strip():
+            raise ValueError("org_id is required")
 
 
 class GuardrailAuditLogV2(Protocol):
@@ -207,6 +213,7 @@ class PostgresGuardrailAuditLogV2:
             """
             INSERT INTO query_audit_events (
                 audit_event_id,
+                org_id,
                 trace_id,
                 user_id,
                 role,
@@ -215,8 +222,9 @@ class PostgresGuardrailAuditLogV2:
                 latency_ms,
                 created_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (audit_event_id) DO UPDATE SET
+                org_id = EXCLUDED.org_id,
                 trace_id = EXCLUDED.trace_id,
                 user_id = EXCLUDED.user_id,
                 role = EXCLUDED.role,
@@ -227,6 +235,7 @@ class PostgresGuardrailAuditLogV2:
             """,
             (
                 record.audit_event_id,
+                record.org_id,
                 record.trace_id,
                 record.user_id,
                 record.role,
@@ -267,6 +276,7 @@ class PostgresGuardrailAuditLogV2:
             """
             SELECT
                 audit_event_id,
+                org_id,
                 trace_id,
                 user_id,
                 role,
@@ -286,15 +296,18 @@ class PostgresGuardrailAuditLogV2:
             return None
 
         audit_event_id = cast(str, row[0])
+        has_org_id = len(row) == 9
+        offset = 1 if has_org_id else 0
         return GuardrailAuditRecordV2(
             audit_event_id=cast(str, row[0]),
-            trace_id=cast(str, row[1]),
-            user_id=cast(str, row[2]),
-            role=cast(str, row[3]),
-            sql_hash=cast(str, row[4]),
-            decision=GuardrailDecisionStatus(cast(str, row[5])),
-            latency_ms=cast(int, row[6]),
-            occurred_at=cast(datetime, row[7]),
+            org_id=cast(str, row[1]) if has_org_id else "org_legacy",
+            trace_id=cast(str, row[1 + offset]),
+            user_id=cast(str, row[2 + offset]),
+            role=cast(str, row[3 + offset]),
+            sql_hash=cast(str, row[4 + offset]),
+            decision=GuardrailDecisionStatus(cast(str, row[5 + offset])),
+            latency_ms=cast(int, row[6 + offset]),
+            occurred_at=cast(datetime, row[7 + offset]),
             rule_hits=self._rule_hits_for_audit_event(audit_event_id),
         )
 

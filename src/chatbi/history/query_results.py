@@ -46,6 +46,7 @@ class RuntimeQueryResultRecord:
     question: str
     sql_text: str
     table_result: Mapping[str, object]
+    org_id: str | None = None
     chart_spec: Mapping[str, object] | None = None
     sql_hash: str | None = None
     created_at: datetime | None = None
@@ -77,6 +78,7 @@ class InMemoryRuntimeQueryResultStore:
             trace_id=record.trace_id,
             session_id=record.session_id,
             user_id=record.user_id,
+            org_id=record.org_id,
             question=record.question,
             sql_text=record.sql_text,
             table_result=record.table_result,
@@ -113,13 +115,15 @@ class PostgresRuntimeQueryResultStore:
                 user_id,
                 title,
                 created_at,
-                updated_at
+                updated_at,
+                org_id
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (session_id) DO UPDATE SET
                 user_id = EXCLUDED.user_id,
                 title = EXCLUDED.title,
-                updated_at = EXCLUDED.updated_at
+                updated_at = EXCLUDED.updated_at,
+                org_id = EXCLUDED.org_id
             """,
             (
                 record.session_id,
@@ -127,6 +131,7 @@ class PostgresRuntimeQueryResultStore:
                 self._title_for(record.question),
                 created_at,
                 created_at,
+                record.org_id or "org_legacy",
             ),
         )
         self._connection.execute(
@@ -137,15 +142,17 @@ class PostgresRuntimeQueryResultStore:
                 trace_id,
                 role,
                 content,
-                created_at
+                created_at,
+                org_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (message_id) DO UPDATE SET
                 session_id = EXCLUDED.session_id,
                 trace_id = EXCLUDED.trace_id,
                 role = EXCLUDED.role,
                 content = EXCLUDED.content,
-                created_at = EXCLUDED.created_at
+                created_at = EXCLUDED.created_at,
+                org_id = EXCLUDED.org_id
             """,
             (
                 message_id,
@@ -154,6 +161,7 @@ class PostgresRuntimeQueryResultStore:
                 "user",
                 record.question,
                 created_at,
+                record.org_id or "org_legacy",
             ),
         )
         self._connection.execute(
@@ -197,6 +205,7 @@ class PostgresRuntimeQueryResultStore:
             SELECT
                 qr.trace_id,
                 m.session_id,
+                s.org_id,
                 s.user_id,
                 m.content,
                 qr.sql_hash,
@@ -213,17 +222,31 @@ class PostgresRuntimeQueryResultStore:
         row = self._connection.fetchone()
         if row is None:
             return None
+        if len(row) == 8:
+            return RuntimeQueryResultRecord(
+                trace_id=cast(str, row[0]),
+                session_id=cast(str, row[1]),
+                user_id=cast(str, row[2]),
+                org_id="org_legacy",
+                question=cast(str, row[3]),
+                sql_text="SQL text is intentionally not persisted.",
+                sql_hash=cast(str, row[4]),
+                table_result=cast(Mapping[str, object], _loads_json(row[5])),
+                chart_spec=cast(Mapping[str, object] | None, _loads_json(row[6])),
+                created_at=cast(datetime, row[7]),
+            )
 
         return RuntimeQueryResultRecord(
             trace_id=cast(str, row[0]),
             session_id=cast(str, row[1]),
-            user_id=cast(str, row[2]),
-            question=cast(str, row[3]),
+            org_id=cast(str, row[2]),
+            user_id=cast(str, row[3]),
+            question=cast(str, row[4]),
             sql_text="SQL text is intentionally not persisted.",
-            sql_hash=cast(str, row[4]),
-            table_result=cast(Mapping[str, object], _loads_json(row[5])),
-            chart_spec=cast(Mapping[str, object] | None, _loads_json(row[6])),
-            created_at=cast(datetime, row[7]),
+            sql_hash=cast(str, row[5]),
+            table_result=cast(Mapping[str, object], _loads_json(row[6])),
+            chart_spec=cast(Mapping[str, object] | None, _loads_json(row[7])),
+            created_at=cast(datetime, row[8]),
         )
 
     def _message_id_for(self, trace_id: str) -> str:

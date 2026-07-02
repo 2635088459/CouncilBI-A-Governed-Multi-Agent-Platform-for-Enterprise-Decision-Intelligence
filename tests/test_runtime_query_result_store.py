@@ -58,6 +58,7 @@ def make_record() -> RuntimeQueryResultRecord:
         trace_id="tr_12345678",
         session_id="ses_12345678",
         user_id="u_001",
+        org_id="org_001",
         question="Show revenue trend.",
         sql_text="SELECT month, revenue FROM revenue_by_month LIMIT 100",
         table_result={
@@ -95,12 +96,14 @@ def test_postgres_runtime_query_result_store_saves_session_message_and_result() 
     assert session_params[0] == "ses_12345678"
     assert session_params[1] == "u_001"
     assert session_params[2] == "Show revenue trend."
+    assert session_params[-1] == "org_001"
 
     assert "INSERT INTO runtime.messages" in message_sql
     assert message_params[0] == "msg_tr_12345678_user"
     assert message_params[1] == "ses_12345678"
     assert message_params[2] == "tr_12345678"
     assert message_params[3] == "user"
+    assert message_params[-1] == "org_001"
 
     assert "INSERT INTO runtime.query_results" in result_sql
     assert result_params[0] == "qr_tr_12345678"

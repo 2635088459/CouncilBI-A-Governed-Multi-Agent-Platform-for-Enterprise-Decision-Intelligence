@@ -43,27 +43,27 @@ class RagRepository(Protocol):
         """Persist the latest state of an index job."""
         ...
 
-    def document_by_id(self, document_id: str) -> RagDocument | None:
+    def document_by_id(self, document_id: str, org_id: str | None = None) -> RagDocument | None:
         """Return one indexed document by id."""
         ...
 
-    def chunk_by_id(self, chunk_id: str) -> RagChunk | None:
+    def chunk_by_id(self, chunk_id: str, org_id: str | None = None) -> RagChunk | None:
         """Return one indexed chunk by id."""
         ...
 
-    def job_by_id(self, job_id: str) -> IndexJob | None:
+    def job_by_id(self, job_id: str, org_id: str | None = None) -> IndexJob | None:
         """Return one index job by id."""
         ...
 
-    def list_documents(self) -> tuple[RagDocument, ...]:
+    def list_documents(self, org_id: str | None = None) -> tuple[RagDocument, ...]:
         """Return all indexed document rows."""
         ...
 
-    def list_chunks(self) -> tuple[RagChunk, ...]:
+    def list_chunks(self, org_id: str | None = None) -> tuple[RagChunk, ...]:
         """Return all indexed chunk rows."""
         ...
 
-    def list_embedding_metadata(self) -> tuple[EmbeddingMetadata, ...]:
+    def list_embedding_metadata(self, org_id: str | None = None) -> tuple[EmbeddingMetadata, ...]:
         """Return all embedding metadata rows."""
         ...
 
@@ -71,7 +71,11 @@ class RagRepository(Protocol):
         """Persist evidence events produced by retrieval."""
         ...
 
-    def list_evidence_events_by_trace_id(self, trace_id: str) -> tuple[EvidenceEvent, ...]:
+    def list_evidence_events_by_trace_id(
+        self,
+        trace_id: str,
+        org_id: str | None = None,
+    ) -> tuple[EvidenceEvent, ...]:
         """Return evidence events for one request trace."""
         ...
 
@@ -97,42 +101,73 @@ class InMemoryRagRepository:
     def save_job(self, job: IndexJob) -> None:
         self._jobs_by_id[job.job_id] = job
 
-    def document_by_id(self, document_id: str) -> RagDocument | None:
+    def document_by_id(self, document_id: str, org_id: str | None = None) -> RagDocument | None:
+        if org_id is not None:
+            document = self._documents_by_id.get(document_id)
+            if document is None or document.org_id != org_id:
+                return None
+            return document
         return self._documents_by_id.get(document_id)
 
-    def chunk_by_id(self, chunk_id: str) -> RagChunk | None:
+    def chunk_by_id(self, chunk_id: str, org_id: str | None = None) -> RagChunk | None:
+        if org_id is not None:
+            chunk = self._chunks_by_id.get(chunk_id)
+            if chunk is None or chunk.org_id != org_id:
+                return None
+            return chunk
         return self._chunks_by_id.get(chunk_id)
 
-    def job_by_id(self, job_id: str) -> IndexJob | None:
+    def job_by_id(self, job_id: str, org_id: str | None = None) -> IndexJob | None:
+        if org_id is not None:
+            job = self._jobs_by_id.get(job_id)
+            if job is None or job.org_id != org_id:
+                return None
+            return job
         return self._jobs_by_id.get(job_id)
 
-    def list_documents(self) -> tuple[RagDocument, ...]:
-        return tuple(
+    def list_documents(self, org_id: str | None = None) -> tuple[RagDocument, ...]:
+        documents = tuple(
             self._documents_by_id[document_id]
             for document_id in sorted(self._documents_by_id)
         )
+        if org_id is None:
+            return documents
+        return tuple(document for document in documents if document.org_id == org_id)
 
-    def list_chunks(self) -> tuple[RagChunk, ...]:
-        return tuple(
+    def list_chunks(self, org_id: str | None = None) -> tuple[RagChunk, ...]:
+        chunks = tuple(
             sorted(
                 self._chunks_by_id.values(),
                 key=lambda chunk: (chunk.document_id, chunk.position),
             )
         )
+        if org_id is None:
+            return chunks
+        return tuple(chunk for chunk in chunks if chunk.org_id == org_id)
 
-    def list_embedding_metadata(self) -> tuple[EmbeddingMetadata, ...]:
-        return tuple(
+    def list_embedding_metadata(self, org_id: str | None = None) -> tuple[EmbeddingMetadata, ...]:
+        metadata_rows = tuple(
             self._embedding_metadata_by_id[embedding_id]
             for embedding_id in sorted(self._embedding_metadata_by_id)
         )
+        if org_id is None:
+            return metadata_rows
+        return tuple(metadata for metadata in metadata_rows if metadata.org_id == org_id)
 
     def save_evidence_events(self, events: tuple[EvidenceEvent, ...]) -> None:
         for event in events:
             current_events = self._events_by_trace_id.get(event.trace_id, ())
             self._events_by_trace_id[event.trace_id] = current_events + (event,)
 
-    def list_evidence_events_by_trace_id(self, trace_id: str) -> tuple[EvidenceEvent, ...]:
-        return self._events_by_trace_id.get(trace_id, ())
+    def list_evidence_events_by_trace_id(
+        self,
+        trace_id: str,
+        org_id: str | None = None,
+    ) -> tuple[EvidenceEvent, ...]:
+        events = self._events_by_trace_id.get(trace_id, ())
+        if org_id is None:
+            return events
+        return tuple(event for event in events if event.org_id == org_id)
 
 
 class RagPostgresConnection(Protocol):
@@ -189,6 +224,7 @@ class PostgresRagRepository:
         "published_at",
         "business_tags",
         "permission_tags",
+        "org_id",
     )
     _chunk_columns = (
         "chunk_id",
@@ -196,6 +232,7 @@ class PostgresRagRepository:
         "position",
         "chunk_text",
         "token_count",
+        "org_id",
     )
     _embedding_columns = (
         "embedding_id",
@@ -203,12 +240,14 @@ class PostgresRagRepository:
         "model_name",
         "model_version",
         "dimensions",
+        "org_id",
     )
     _job_columns = (
         "job_id",
         "document_id",
         "status",
         "error_message",
+        "org_id",
     )
     _event_columns = (
         "event_id",
@@ -217,6 +256,7 @@ class PostgresRagRepository:
         "document_id",
         "chunk_id",
         "returned_at",
+        "org_id",
     )
 
     def __init__(self, connection: RagPostgresConnection) -> None:
@@ -243,98 +283,113 @@ class PostgresRagRepository:
                 job_id,
                 document_id,
                 status,
-                error_message
+                error_message,
+                org_id
             )
-            VALUES (%s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (job_id) DO UPDATE SET
                 document_id = EXCLUDED.document_id,
                 status = EXCLUDED.status,
-                error_message = EXCLUDED.error_message
+                error_message = EXCLUDED.error_message,
+                org_id = EXCLUDED.org_id
             """,
             (
                 row["job_id"],
                 row["document_id"],
                 row["status"],
                 row["error_message"],
+                row["org_id"],
             ),
         )
         self._connection.commit()
 
-    def document_by_id(self, document_id: str) -> RagDocument | None:
+    def document_by_id(self, document_id: str, org_id: str | None = None) -> RagDocument | None:
+        where_clause, params = _tenant_where("document_id = %s", (document_id,), org_id)
         self._connection.execute(
             f"""
             SELECT {", ".join(self._document_columns)}
             FROM rag.documents
-            WHERE document_id = %s
+            WHERE {where_clause}
             """,
-            (document_id,),
+            params,
         )
         row = self._connection.fetchone()
         if row is None:
             return None
         return document_from_row(_row_mapping(self._document_columns, row))
 
-    def chunk_by_id(self, chunk_id: str) -> RagChunk | None:
+    def chunk_by_id(self, chunk_id: str, org_id: str | None = None) -> RagChunk | None:
+        where_clause, params = _tenant_where("chunk_id = %s", (chunk_id,), org_id)
         self._connection.execute(
             f"""
             SELECT {", ".join(self._chunk_columns)}
             FROM rag.chunks
-            WHERE chunk_id = %s
+            WHERE {where_clause}
             """,
-            (chunk_id,),
+            params,
         )
         row = self._connection.fetchone()
         if row is None:
             return None
         return chunk_from_row(_row_mapping(self._chunk_columns, row))
 
-    def job_by_id(self, job_id: str) -> IndexJob | None:
+    def job_by_id(self, job_id: str, org_id: str | None = None) -> IndexJob | None:
+        where_clause, params = _tenant_where("job_id = %s", (job_id,), org_id)
         self._connection.execute(
             f"""
             SELECT {", ".join(self._job_columns)}
             FROM rag.index_jobs
-            WHERE job_id = %s
+            WHERE {where_clause}
             """,
-            (job_id,),
+            params,
         )
         row = self._connection.fetchone()
         if row is None:
             return None
         return index_job_from_row(_row_mapping(self._job_columns, row))
 
-    def list_documents(self) -> tuple[RagDocument, ...]:
+    def list_documents(self, org_id: str | None = None) -> tuple[RagDocument, ...]:
+        where_clause, params = _tenant_filter(org_id)
         self._connection.execute(
             f"""
             SELECT {", ".join(self._document_columns)}
             FROM rag.documents
+            {where_clause}
             ORDER BY document_id ASC
-            """
+            """,
+            params,
         )
         return tuple(
             document_from_row(_row_mapping(self._document_columns, row))
             for row in self._connection.fetchall()
         )
 
-    def list_chunks(self) -> tuple[RagChunk, ...]:
+    def list_chunks(self, org_id: str | None = None) -> tuple[RagChunk, ...]:
+        where_clause, params = _tenant_filter(org_id)
         self._connection.execute(
             f"""
             SELECT {", ".join(self._chunk_columns)}
             FROM rag.chunks
+            {where_clause}
             ORDER BY document_id ASC, position ASC
-            """
+            """,
+            params,
         )
         return tuple(
             chunk_from_row(_row_mapping(self._chunk_columns, row))
             for row in self._connection.fetchall()
         )
 
-    def list_embedding_metadata(self) -> tuple[EmbeddingMetadata, ...]:
+    def list_embedding_metadata(self, org_id: str | None = None) -> tuple[EmbeddingMetadata, ...]:
+        where_clause, params = _tenant_filter(org_id)
         self._connection.execute(
             f"""
             SELECT {", ".join(self._embedding_columns)}
             FROM rag.embedding_metadata
+            {where_clause}
             ORDER BY embedding_id ASC
-            """
+            """,
+            params,
         )
         return tuple(
             embedding_metadata_from_row(_row_mapping(self._embedding_columns, row))
@@ -352,15 +407,17 @@ class PostgresRagRepository:
                     evidence_id,
                     document_id,
                     chunk_id,
-                    returned_at
+                    returned_at,
+                    org_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (event_id) DO UPDATE SET
                     trace_id = EXCLUDED.trace_id,
                     evidence_id = EXCLUDED.evidence_id,
                     document_id = EXCLUDED.document_id,
                     chunk_id = EXCLUDED.chunk_id,
-                    returned_at = EXCLUDED.returned_at
+                    returned_at = EXCLUDED.returned_at,
+                    org_id = EXCLUDED.org_id
                 """,
                 (
                     row["event_id"],
@@ -369,19 +426,25 @@ class PostgresRagRepository:
                     row["document_id"],
                     row["chunk_id"],
                     row["returned_at"],
+                    row["org_id"],
                 ),
             )
         self._connection.commit()
 
-    def list_evidence_events_by_trace_id(self, trace_id: str) -> tuple[EvidenceEvent, ...]:
+    def list_evidence_events_by_trace_id(
+        self,
+        trace_id: str,
+        org_id: str | None = None,
+    ) -> tuple[EvidenceEvent, ...]:
+        where_clause, params = _tenant_where("trace_id = %s", (trace_id,), org_id)
         self._connection.execute(
             f"""
             SELECT {", ".join(self._event_columns)}
             FROM rag.evidence_events
-            WHERE trace_id = %s
+            WHERE {where_clause}
             ORDER BY returned_at ASC, event_id ASC
             """,
-            (trace_id,),
+            params,
         )
         return tuple(
             evidence_event_from_row(_row_mapping(self._event_columns, row))
@@ -399,16 +462,18 @@ class PostgresRagRepository:
                 document_type,
                 published_at,
                 business_tags,
-                permission_tags
+                permission_tags,
+                org_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (document_id) DO UPDATE SET
                 source = EXCLUDED.source,
                 title = EXCLUDED.title,
                 document_type = EXCLUDED.document_type,
                 published_at = EXCLUDED.published_at,
                 business_tags = EXCLUDED.business_tags,
-                permission_tags = EXCLUDED.permission_tags
+                permission_tags = EXCLUDED.permission_tags,
+                org_id = EXCLUDED.org_id
             """,
             (
                 row["document_id"],
@@ -418,6 +483,7 @@ class PostgresRagRepository:
                 row["published_at"],
                 row["business_tags"],
                 row["permission_tags"],
+                row["org_id"],
             ),
         )
 
@@ -430,14 +496,16 @@ class PostgresRagRepository:
                 document_id,
                 position,
                 chunk_text,
-                token_count
+                token_count,
+                org_id
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (chunk_id) DO UPDATE SET
                 document_id = EXCLUDED.document_id,
                 position = EXCLUDED.position,
                 chunk_text = EXCLUDED.chunk_text,
-                token_count = EXCLUDED.token_count
+                token_count = EXCLUDED.token_count,
+                org_id = EXCLUDED.org_id
             """,
             (
                 row["chunk_id"],
@@ -445,6 +513,7 @@ class PostgresRagRepository:
                 row["position"],
                 row["chunk_text"],
                 row["token_count"],
+                row["org_id"],
             ),
         )
 
@@ -457,14 +526,16 @@ class PostgresRagRepository:
                 chunk_id,
                 model_name,
                 model_version,
-                dimensions
+                dimensions,
+                org_id
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (embedding_id) DO UPDATE SET
                 chunk_id = EXCLUDED.chunk_id,
                 model_name = EXCLUDED.model_name,
                 model_version = EXCLUDED.model_version,
-                dimensions = EXCLUDED.dimensions
+                dimensions = EXCLUDED.dimensions,
+                org_id = EXCLUDED.org_id
             """,
             (
                 row["embedding_id"],
@@ -472,6 +543,7 @@ class PostgresRagRepository:
                 row["model_name"],
                 row["model_version"],
                 row["dimensions"],
+                row["org_id"],
             ),
         )
 
@@ -483,6 +555,24 @@ def postgres_rag_repository_from_psycopg(connection: Any) -> PostgresRagReposito
 
 
 def _row_mapping(columns: tuple[str, ...], row: Sequence[object]) -> dict[str, object]:
+    if len(row) == len(columns) - 1 and columns[-1] == "org_id":
+        return {**dict(zip(columns[:-1], row, strict=True)), "org_id": "org_legacy"}
     if len(row) != len(columns):
         raise ValueError("RAG PostgreSQL row has unexpected column count.")
     return dict(zip(columns, row, strict=True))
+
+
+def _tenant_filter(org_id: str | None) -> tuple[str, tuple[object, ...]]:
+    if org_id is None:
+        return "", ()
+    return "WHERE org_id = %s", (org_id,)
+
+
+def _tenant_where(
+    base_where: str,
+    base_params: tuple[object, ...],
+    org_id: str | None,
+) -> tuple[str, tuple[object, ...]]:
+    if org_id is None:
+        return base_where, base_params
+    return f"{base_where} AND org_id = %s", (*base_params, org_id)

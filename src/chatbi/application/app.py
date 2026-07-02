@@ -115,6 +115,7 @@ class ChatBIApplication:
         self._alert_evaluator = AlertEvaluator()
         self._runtime_samples: list[RuntimeRequestSample] = []
         self._latest_eval_result: EvalRunResultPayload | None = None
+        self._latest_eval_result_by_org: dict[str, EvalRunResultPayload] = {}
         self._observability_logger = observability_logger or ObservabilityLogger()
         self._evaluation_repository = evaluation_repository or InMemoryEvaluationRepository()
         self._eval_runner = EvalRunner(self._evaluation_repository)
@@ -313,7 +314,11 @@ class ChatBIApplication:
 
         bounded_page_size = min(max(page_size, 1), 100)
         records = sorted(
-            self._orchestrator.history.list_all(),
+            (
+                record
+                for record in self._orchestrator.history.list_all()
+                if record.request.user_id == user_id
+            ),
             key=lambda record: record.created_at,
             reverse=True,
         )
@@ -352,7 +357,7 @@ class ChatBIApplication:
             return rate_limited
 
         record = self._orchestrator.replay(trace_id)
-        if record is None:
+        if record is None or record.request.user_id != user_id:
             response = error_envelope(
                 code=ApiErrorCode.REQ_INVALID_ARGUMENT,
                 message="Trace id was not found.",
@@ -526,7 +531,12 @@ class ChatBIApplication:
         )
         return response
 
-    def handle_quality_dashboard(self, user_id: str, trace_id: str) -> ApiEnvelope:
+    def handle_quality_dashboard(
+        self,
+        user_id: str,
+        trace_id: str,
+        org_id: str = "org_legacy",
+    ) -> ApiEnvelope:
         rate_limited = self._rate_limit_response(
             user_id=user_id,
             trace_id=trace_id,
@@ -540,7 +550,10 @@ class ChatBIApplication:
         dashboard = quality_dashboard_payload(
             slo_statuses=self._alert_evaluator.slo_statuses(samples=samples, now=now),
             alerts=self._alert_evaluator.evaluate(samples=samples, now=now),
-            latest_eval_result=self._latest_eval_result,
+            latest_eval_result=self._latest_eval_result_by_org.get(
+                org_id,
+                self._latest_eval_result if org_id == "org_legacy" else None,
+            ),
         )
         response = envelope(
             data={
@@ -564,6 +577,7 @@ class ChatBIApplication:
         user_id: str,
         trace_id: str,
         payload: EvalRunRequestPayload,
+        org_id: str = "org_legacy",
     ) -> ApiEnvelope:
         rate_limited = self._rate_limit_response(
             user_id=user_id,
@@ -595,8 +609,11 @@ class ChatBIApplication:
             eval_suite_id=payload.eval_suite_id,
             observations=observations,
             expectations=expectations,
+            org_id=org_id,
         )
-        self._latest_eval_result = result
+        if org_id == "org_legacy":
+            self._latest_eval_result = result
+        self._latest_eval_result_by_org[org_id] = result
         response = envelope(
             data=asdict(result),
             trace_id=trace_id,
@@ -614,6 +631,7 @@ class ChatBIApplication:
         user_id: str,
         trace_id: str,
         eval_run_id: str,
+        org_id: str = "org_legacy",
     ) -> ApiEnvelope:
         rate_limited = self._rate_limit_response(
             user_id=user_id,
@@ -623,7 +641,7 @@ class ChatBIApplication:
         if rate_limited is not None:
             return rate_limited
 
-        report = eval_run_report(self._evaluation_repository, eval_run_id)
+        report = eval_run_report(self._evaluation_repository, eval_run_id, org_id=org_id)
         if report is None:
             response = error_envelope(
                 code=ApiErrorCode.REQ_INVALID_ARGUMENT,
@@ -1001,6 +1019,7 @@ class ChatBIApplication:
         eval_suite_id: str,
         observations: tuple[EvaluationObservation, ...],
         expectations: dict[str, BenchmarkExpectation],
+        org_id: str = "org_legacy",
     ) -> None:
         observations_by_question = {
             observation.question: observation
@@ -1027,6 +1046,7 @@ class ChatBIApplication:
                 expectation=expectations[case.question],
             ),
             eval_run_id=eval_run_id,
+            org_id=org_id,
         )
 
     def _eval_score_for_case(

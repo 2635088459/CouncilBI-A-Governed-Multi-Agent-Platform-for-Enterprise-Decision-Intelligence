@@ -15,8 +15,14 @@ def test_analytics_v2_table_sql_declares_required_table() -> None:
     assert "CREATE SCHEMA IF NOT EXISTS analytics" in ANALYTICS_V2_TABLES_SQL
     assert "CREATE TABLE IF NOT EXISTS analytics.results" in ANALYTICS_V2_TABLES_SQL
     assert "trace_id TEXT PRIMARY KEY" in ANALYTICS_V2_TABLES_SQL
+    assert "org_id TEXT NOT NULL DEFAULT 'org_legacy'" in ANALYTICS_V2_TABLES_SQL
+    assert "user_id TEXT NOT NULL DEFAULT 'user_legacy'" in ANALYTICS_V2_TABLES_SQL
     assert "anomaly_points JSONB NOT NULL" in ANALYTICS_V2_TABLES_SQL
     assert "forecast_points JSONB NOT NULL" in ANALYTICS_V2_TABLES_SQL
+    assert "ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy'" in ANALYTICS_V2_TABLES_SQL
+    assert "ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'user_legacy'" in ANALYTICS_V2_TABLES_SQL
+    assert "idx_analytics_results_org_trace_id" in ANALYTICS_V2_TABLES_SQL
+    assert "idx_analytics_results_org_user_trace_id" in ANALYTICS_V2_TABLES_SQL
 
 
 def test_analytics_record_round_trips_through_postgres_row() -> None:
@@ -25,6 +31,8 @@ def test_analytics_record_round_trips_through_postgres_row() -> None:
         metric_id="revenue",
         semantic_version_id="sem_v2",
         parameters={"grain": "day", "horizon": 3},
+        org_id="org_001",
+        user_id="user_001",
         result=AnalyticsResult(
             anomaly_points=(
                 AnomalyPoint(
@@ -55,8 +63,31 @@ def test_analytics_record_round_trips_through_postgres_row() -> None:
     restored = analytics_record_from_row(row)
 
     assert row["trace_id"] == "tr_analytics_001"
+    assert row["org_id"] == "org_001"
+    assert row["user_id"] == "user_001"
     assert row["method"] == "rolling_zscore_linear_forecast"
     assert restored == record
+
+
+def test_analytics_record_from_legacy_row_uses_explicit_legacy_owner() -> None:
+    row = {
+        "trace_id": "tr_legacy_analytics",
+        "metric_id": "revenue",
+        "semantic_version_id": "sem_v2",
+        "parameters": {"grain": "day"},
+        "anomaly_points": (),
+        "forecast_points": (),
+        "confidence_interval": None,
+        "quality_warnings": (),
+        "method": "trend_summary",
+        "model_version": "analytics-v2-rule-based-001",
+        "explanation": "Too little data.",
+    }
+
+    record = analytics_record_from_row(row)
+
+    assert record.org_id == "org_legacy"
+    assert record.user_id == "user_legacy"
 
 
 def test_analytics_row_mapper_rejects_invalid_trace_id() -> None:

@@ -15,6 +15,19 @@ def make_payload(question: str = "Show revenue trend.") -> ChatQueryRequestPaylo
     )
 
 
+def make_payload_for_user(
+    user_id: str,
+    question: str = "Show revenue trend.",
+) -> ChatQueryRequestPayload:
+    return ChatQueryRequestPayload(
+        user_id=user_id,
+        session_id=f"s_{user_id}",
+        question=question,
+        locale=Locale.EN,
+        role=UserRole.BUSINESS_USER,
+    )
+
+
 def test_handle_chat_query_returns_success_envelope() -> None:
     app = ChatBIApplication()
 
@@ -87,6 +100,45 @@ def test_handle_chat_history_returns_cursor_page() -> None:
     assert envelope.data is not None
     assert len(envelope.data["items"]) == 1
     assert envelope.data["next_cursor"] == "1"
+
+
+def test_handle_chat_history_filters_records_by_user_id() -> None:
+    app = ChatBIApplication()
+    app.handle_chat_query(
+        make_payload_for_user("u_001", "Show revenue trend."),
+        trace_id="trc_user_one",
+    )
+    app.handle_chat_query(
+        make_payload_for_user("u_002", "Show order count."),
+        trace_id="trc_user_two",
+    )
+
+    envelope = app.handle_chat_history(
+        user_id="u_001",
+        trace_id="trc_history_user_one",
+        page_size=20,
+    )
+
+    assert envelope.code == 0
+    assert envelope.data is not None
+    assert len(envelope.data["items"]) == 1
+    assert envelope.data["items"][0]["question"] == "Show revenue trend."
+
+
+def test_handle_query_detail_hides_other_users_trace() -> None:
+    app = ChatBIApplication()
+    app.handle_chat_query(
+        make_payload_for_user("u_002", "Show order count."),
+        trace_id="trc_user_two_detail",
+    )
+
+    envelope = app.handle_query_detail(
+        trace_id="trc_user_two_detail",
+        user_id="u_001",
+    )
+
+    assert envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT
+    assert envelope.message == "Trace id was not found."
 
 
 def test_handle_chat_query_enforces_user_rate_limit() -> None:

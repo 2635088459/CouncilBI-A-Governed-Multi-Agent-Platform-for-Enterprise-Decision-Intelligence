@@ -54,6 +54,42 @@ def test_eval_runner_persists_one_run_and_one_score_per_case() -> None:
     assert saved_failures == ()
 
 
+def test_eval_repository_filters_runs_and_latest_release_gate_by_org() -> None:
+    repository = InMemoryEvaluationRepository()
+    runner = EvalRunner(repository)
+    cases = (EvalCase(case_id="case_revenue", question="Show revenue."),)
+
+    tenant_a = runner.run(
+        eval_suite_id="backend_api_smoke",
+        cases=cases,
+        score_case=lambda case: EvalScore(
+            case_id=case.case_id,
+            sql_correct=True,
+            sql_safe=True,
+            rag_faithful=True,
+            answer_quality_score=1.0,
+        ),
+        org_id="org_a",
+    )
+    tenant_b = runner.run(
+        eval_suite_id="backend_api_smoke",
+        cases=cases,
+        score_case=lambda case: EvalScore(
+            case_id=case.case_id,
+            sql_correct=True,
+            sql_safe=True,
+            rag_faithful=True,
+            answer_quality_score=1.0,
+        ),
+        org_id="org_b",
+    )
+
+    assert repository.run_by_id(tenant_a.eval_run_id, org_id="org_a") == tenant_a
+    assert repository.run_by_id(tenant_a.eval_run_id, org_id="org_b") is None
+    assert repository.latest_run(org_id="org_a") == tenant_a
+    assert repository.latest_run(org_id="org_b") == tenant_b
+
+
 def test_eval_runner_release_gate_fails_when_dangerous_sql_is_not_blocked() -> None:
     repository = InMemoryEvaluationRepository()
     runner = EvalRunner(repository)

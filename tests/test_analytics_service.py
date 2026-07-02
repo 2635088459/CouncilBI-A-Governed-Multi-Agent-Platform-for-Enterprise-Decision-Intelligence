@@ -34,6 +34,30 @@ def test_valid_daily_revenue_fixture_returns_forecast_and_persists_by_trace_id()
     assert saved.parameters["model_version"] == service.model_version
 
 
+def test_analytics_request_owner_is_persisted_on_record_and_parameters() -> None:
+    repository = InMemoryAnalyticsRepository()
+    service = AnalyticsService(repository)
+    request = _request(
+        trace_id="tr_analytics_owner",
+        rows=(
+            {"date": "2026-06-01", "revenue": 100.0},
+            {"date": "2026-06-02", "revenue": 105.0},
+            {"date": "2026-06-03", "revenue": 110.0},
+        ),
+        org_id="org_owner",
+        user_id="user_owner",
+    )
+
+    service.analyze(request)
+
+    saved = service.result_by_trace_id("tr_analytics_owner")
+    assert saved is not None
+    assert saved.org_id == "org_owner"
+    assert saved.user_id == "user_owner"
+    assert saved.parameters["org_id"] == "org_owner"
+    assert saved.parameters["user_id"] == "user_owner"
+
+
 def test_two_point_fixture_degrades_to_trend_summary() -> None:
     service = AnalyticsService(InMemoryAnalyticsRepository())
     request = _request(
@@ -117,6 +141,8 @@ def test_same_fixture_returns_identical_anomaly_dates() -> None:
 def _request(
     trace_id: str,
     rows: tuple[dict[str, object], ...],
+    org_id: str | None = None,
+    user_id: str | None = None,
 ) -> AnalyticsRequest:
     return AnalyticsRequest(
         trace_id=trace_id,
@@ -126,4 +152,6 @@ def _request(
         value_column="revenue",
         grain=AnalyticsGrain.DAY,
         rows=rows,
+        org_id=org_id,
+        user_id=user_id,
     )

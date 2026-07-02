@@ -74,6 +74,7 @@ def make_audit_record() -> GuardrailAuditRecordV2:
             ),
         ),
         latency_ms=12,
+        org_id="org_001",
         occurred_at=datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc),
     )
 
@@ -106,6 +107,7 @@ def test_postgres_guardrail_audit_store_saves_event_and_rule_hits() -> None:
     assert "ON CONFLICT (audit_event_id) DO UPDATE" in audit_sql
     assert audit_params == (
         "aud_12345678",
+        "org_001",
         "tr_12345678",
         "u_001",
         "analyst",
@@ -159,11 +161,38 @@ def test_postgres_guardrail_audit_store_loads_latest_event_by_trace_id() -> None
     assert record.sql_hash == "abc123"
     assert record.decision is GuardrailDecisionStatus.ALLOW
     assert record.latency_ms == 7
+    assert record.org_id == "org_legacy"
     assert len(record.rule_hits) == 1
     assert record.rule_hits[0].rule_code is GuardrailRuleCode.ROW_LIMIT_REWRITE
     assert record.rule_hits[0].message == "A row limit was added to the SQL."
     assert connection.commands[0][1] == ("tr_12345678",)
     assert connection.commands[1][1] == ("aud_12345678",)
+
+
+def test_postgres_guardrail_audit_store_loads_tenant_scope_from_new_rows() -> None:
+    occurred_at = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+    connection = FakeGuardrailAuditConnection()
+    connection.next_rows = [
+        (
+            "aud_12345678",
+            "org_001",
+            "tr_12345678",
+            "u_001",
+            "analyst",
+            "abc123",
+            "allow",
+            7,
+            occurred_at,
+        ),
+        None,
+    ]
+    store = PostgresGuardrailAuditLogV2(connection)
+
+    record = store.get_v2("tr_12345678")
+
+    assert record is not None
+    assert record.org_id == "org_001"
+    assert record.trace_id == "tr_12345678"
 
 
 def test_psycopg_guardrail_audit_connection_adapts_cursor_fetchone() -> None:

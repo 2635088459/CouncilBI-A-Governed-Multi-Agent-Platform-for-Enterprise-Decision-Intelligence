@@ -47,6 +47,47 @@ def test_log_sanitizer_masks_sensitive_structured_attributes() -> None:
     assert attributes["nested"]["comment"] == "Reach me at [masked-email]"
 
 
+def test_log_sanitizer_masks_passwords_and_tokens_in_messages() -> None:
+    sanitizer = LogSanitizer()
+
+    message = sanitizer.sanitize_message(
+        "Sign in failed password=correct-horse Authorization: Bearer abc.def.ghi "
+        "refresh_token=rfr_plaintext access_token=acc_plaintext secret:open-sesame"
+    )
+
+    assert "correct-horse" not in message
+    assert "abc.def.ghi" not in message
+    assert "rfr_plaintext" not in message
+    assert "acc_plaintext" not in message
+    assert "open-sesame" not in message
+    assert "[masked-token]" in message
+    assert "[masked-secret]" in message
+
+
+def test_log_sanitizer_masks_auth_tokens_in_structured_attributes() -> None:
+    sanitizer = LogSanitizer()
+
+    attributes = sanitizer.sanitize_attributes(
+        {
+            "password": "correct horse battery staple",
+            "access_token": "signed.access.token",
+            "refresh_token": "rfr_plaintext",
+            "authorization": "Bearer signed.access.token",
+            "nested": {
+                "api_key": "sk_live_secret",
+                "safe_metric": "revenue",
+            },
+        }
+    )
+
+    assert attributes["password"] == "[masked-secret]"
+    assert attributes["access_token"] == "[masked-secret]"
+    assert attributes["refresh_token"] == "[masked-secret]"
+    assert attributes["authorization"] == "[masked-secret]"
+    assert attributes["nested"]["api_key"] == "[masked-secret]"
+    assert attributes["nested"]["safe_metric"] == "revenue"
+
+
 def test_observability_logger_stores_only_sanitized_records() -> None:
     store = InMemoryObservabilityLogStore()
     logger = ObservabilityLogger(store=store)

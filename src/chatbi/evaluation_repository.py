@@ -118,6 +118,7 @@ class EvalRunRecord:
     failed_cases: int
     sql_safety_score: float
     release_gate_passed: bool
+    org_id: str = "org_legacy"
 
 
 class EvaluationRepository(Protocol):
@@ -133,7 +134,7 @@ class EvaluationRepository(Protocol):
         """Insert one failure row under an eval run."""
         ...
 
-    def run_by_id(self, eval_run_id: str) -> EvalRunRecord | None:
+    def run_by_id(self, eval_run_id: str, org_id: str | None = None) -> EvalRunRecord | None:
         """Read one eval run row."""
         ...
 
@@ -171,8 +172,13 @@ class InMemoryEvaluationRepository(EvaluationRepository):
         current_failures = self._failures_by_run_id.get(eval_run_id, ())
         self._failures_by_run_id[eval_run_id] = (*current_failures, failure)
 
-    def run_by_id(self, eval_run_id: str) -> EvalRunRecord | None:
-        return self._runs_by_id.get(eval_run_id)
+    def run_by_id(self, eval_run_id: str, org_id: str | None = None) -> EvalRunRecord | None:
+        record = self._runs_by_id.get(eval_run_id)
+        if record is None:
+            return None
+        if org_id is not None and record.org_id != org_id:
+            return None
+        return record
 
     def scores_by_run_id(self, eval_run_id: str) -> tuple[EvalScore, ...]:
         return self._scores_by_run_id.get(eval_run_id, ())
@@ -180,10 +186,15 @@ class InMemoryEvaluationRepository(EvaluationRepository):
     def failures_by_run_id(self, eval_run_id: str) -> tuple[EvalFailureRecord, ...]:
         return self._failures_by_run_id.get(eval_run_id, ())
 
-    def latest_run(self) -> EvalRunRecord | None:
-        if not self._runs_by_id:
+    def latest_run(self, org_id: str | None = None) -> EvalRunRecord | None:
+        candidates = tuple(
+            record
+            for record in self._runs_by_id.values()
+            if org_id is None or record.org_id == org_id
+        )
+        if not candidates:
             return None
-        return max(self._runs_by_id.values(), key=lambda record: record.started_at)
+        return max(candidates, key=lambda record: record.started_at)
 
 
 class EvalRunner:
@@ -198,9 +209,12 @@ class EvalRunner:
         cases: tuple[EvalCase, ...],
         score_case: Callable[[EvalCase], EvalScore],
         eval_run_id: str | None = None,
+        org_id: str = "org_legacy",
     ) -> EvalRunRecord:
         if not eval_suite_id.strip():
             raise ValueError("eval_suite_id is required")
+        if not org_id.strip():
+            raise ValueError("org_id is required")
 
         active_eval_run_id = eval_run_id or new_eval_run_id()
         started_at = utc_now()
@@ -216,6 +230,7 @@ class EvalRunner:
                 failed_cases=0,
                 sql_safety_score=1.0,
                 release_gate_passed=False,
+                org_id=org_id,
             )
         )
 
@@ -237,6 +252,7 @@ class EvalRunner:
             eval_suite_id=eval_suite_id,
             started_at=started_at,
             scores=tuple(scores),
+            org_id=org_id,
         )
         self._repository.save_run(final_record)
         return final_record
@@ -247,6 +263,7 @@ class EvalRunner:
         eval_suite_id: str,
         started_at: datetime,
         scores: tuple[EvalScore, ...],
+        org_id: str,
     ) -> EvalRunRecord:
         passed_cases = sum(1 for score in scores if score.passed)
         sql_safety_score = _sql_safety_score(scores)
@@ -261,6 +278,7 @@ class EvalRunner:
             failed_cases=len(scores) - passed_cases,
             sql_safety_score=sql_safety_score,
             release_gate_passed=sql_safety_score == 1.0 and passed_cases == len(scores),
+            org_id=org_id,
         )
 
 

@@ -6,6 +6,11 @@ import pytest
 from chatbi.migrations import (
     ANALYTICS_V2_RESULTS_TABLE,
     ANALYTICS_V2_TABLES_SQL,
+    AUTH_ORGANIZATIONS_TABLE,
+    AUTH_REFRESH_SESSIONS_TABLE,
+    AUTH_ROLE_AUDIT_EVENTS_TABLE,
+    AUTH_TABLES_SQL,
+    AUTH_USERS_TABLE,
     BASE_MIGRATION_SQL_STATEMENTS,
     BASE_MIGRATION_VERSION,
     BUSINESS_REVENUE_BY_MONTH_TABLE,
@@ -93,6 +98,7 @@ def test_v2_schemas_sql_creates_all_required_schema_layers() -> None:
         "knowledge",
         "rag",
         "analytics",
+        "auth",
     )
     for schema_name in V2_SCHEMA_NAMES:
         assert f"CREATE SCHEMA IF NOT EXISTS {schema_name};" in V2_SCHEMAS_SQL
@@ -110,6 +116,7 @@ def test_base_migration_sql_statements_are_ordered_for_dependencies() -> None:
         KNOWLEDGE_RAG_SEED_SQL,
         RAG_V2_TABLES_SQL,
         ANALYTICS_V2_TABLES_SQL,
+        AUTH_TABLES_SQL,
         GOVERNANCE_POLICY_TABLES_SQL,
         GOVERNANCE_RESTRICTED_FIELD_POLICY_SEED_SQL,
         EVALUATION_TABLES_SQL,
@@ -228,6 +235,7 @@ def test_rag_v2_tables_sql_creates_spec_v2_rag_tables() -> None:
     assert RAG_V2_EVIDENCE_EVENTS_TABLE == "rag.evidence_events"
     assert "CREATE SCHEMA IF NOT EXISTS rag" in normalized_sql
     assert "CREATE TABLE IF NOT EXISTS rag.documents" in normalized_sql
+    assert "org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_sql
     assert "document_id TEXT PRIMARY KEY" in normalized_sql
     assert "permission_tags TEXT[] NOT NULL DEFAULT '{}'" in normalized_sql
     assert "CREATE TABLE IF NOT EXISTS rag.chunks" in normalized_sql
@@ -241,6 +249,7 @@ def test_rag_v2_tables_sql_creates_spec_v2_rag_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS rag.evidence_events" in normalized_sql
     assert "trace_id TEXT NOT NULL" in normalized_sql
     assert "idx_rag_evidence_events_trace_id" in normalized_sql
+    assert "idx_rag_evidence_events_org_trace_id" in normalized_sql
 
 
 def test_analytics_v2_tables_sql_creates_spec_v2_result_table() -> None:
@@ -250,12 +259,41 @@ def test_analytics_v2_tables_sql_creates_spec_v2_result_table() -> None:
     assert "CREATE SCHEMA IF NOT EXISTS analytics" in normalized_sql
     assert "CREATE TABLE IF NOT EXISTS analytics.results" in normalized_sql
     assert "trace_id TEXT PRIMARY KEY" in normalized_sql
+    assert "org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_sql
+    assert "user_id TEXT NOT NULL DEFAULT 'user_legacy'" in normalized_sql
     assert "parameters JSONB NOT NULL" in normalized_sql
     assert "anomaly_points JSONB NOT NULL" in normalized_sql
     assert "forecast_points JSONB NOT NULL" in normalized_sql
     assert "quality_warnings TEXT[] NOT NULL DEFAULT '{}'" in normalized_sql
     assert "model_version TEXT NOT NULL" in normalized_sql
     assert "idx_analytics_results_metric_id" in normalized_sql
+    assert "idx_analytics_results_org_trace_id" in normalized_sql
+    assert "idx_analytics_results_org_user_trace_id" in normalized_sql
+    assert "ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_sql
+    assert "ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'user_legacy'" in normalized_sql
+
+
+def test_auth_tables_sql_creates_production_identity_store() -> None:
+    normalized_sql = " ".join(AUTH_TABLES_SQL.split())
+
+    assert AUTH_ORGANIZATIONS_TABLE == "auth.organizations"
+    assert AUTH_USERS_TABLE == "auth.users"
+    assert AUTH_REFRESH_SESSIONS_TABLE == "auth.refresh_sessions"
+    assert AUTH_ROLE_AUDIT_EVENTS_TABLE == "auth.role_audit_events"
+    assert "CREATE SCHEMA IF NOT EXISTS auth" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS auth.organizations" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS auth.users" in normalized_sql
+    assert "password_hash TEXT NOT NULL" in normalized_sql
+    assert "roles TEXT[] NOT NULL DEFAULT '{}'" in normalized_sql
+    assert "permissions TEXT[] NOT NULL DEFAULT '{}'" in normalized_sql
+    assert "token_version INTEGER NOT NULL DEFAULT 1" in normalized_sql
+    assert "ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS auth.refresh_sessions" in normalized_sql
+    assert "refresh_token_hash TEXT NOT NULL UNIQUE" in normalized_sql
+    assert "revoked_at TIMESTAMPTZ NULL" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS auth.role_audit_events" in normalized_sql
+    assert "roles_before TEXT[] NOT NULL DEFAULT '{}'" in normalized_sql
+    assert "idx_auth_role_audit_events_org_time" in normalized_sql
 
 
 def test_governance_policy_tables_sql_creates_restricted_field_policy_table() -> None:
@@ -298,6 +336,7 @@ def test_evaluation_tables_sql_creates_cases_runs_and_trace_linked_scores() -> N
     assert EVALUATION_SCORES_TABLE == "evaluation.eval_scores"
     assert "CREATE SCHEMA IF NOT EXISTS evaluation" in normalized_sql
     assert "CREATE TABLE IF NOT EXISTS evaluation.eval_cases" in normalized_sql
+    assert "org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_sql
     assert "eval_case_id TEXT PRIMARY KEY" in normalized_sql
     assert "question TEXT NOT NULL" in normalized_sql
     assert "expected_metric_id TEXT NOT NULL" in normalized_sql
@@ -316,7 +355,9 @@ def test_evaluation_tables_sql_creates_cases_runs_and_trace_linked_scores() -> N
     assert "score NUMERIC NOT NULL CHECK (score >= 0 AND score <= 1)" in normalized_sql
     assert "passed BOOLEAN NOT NULL" in normalized_sql
     assert "idx_evaluation_eval_runs_suite_started_at" in normalized_sql
+    assert "idx_evaluation_eval_runs_org_suite_started_at" in normalized_sql
     assert "idx_evaluation_eval_scores_trace_id" in normalized_sql
+    assert "idx_evaluation_eval_scores_org_trace_id" in normalized_sql
     assert "idx_evaluation_eval_scores_run_case_metric" in normalized_sql
 
 
@@ -435,6 +476,7 @@ def test_governance_audit_tables_sql_creates_guardrail_audit_tables() -> None:
     assert GOVERNANCE_SQL_RULE_HITS_TABLE == "sql_rule_hits"
     assert "CREATE SCHEMA IF NOT EXISTS governance" in normalized_sql
     assert "CREATE TABLE IF NOT EXISTS query_audit_events" in normalized_sql
+    assert "org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_sql
     assert "trace_id TEXT NOT NULL" in normalized_sql
     assert "sql_hash TEXT NOT NULL" in normalized_sql
     assert "decision TEXT NOT NULL CHECK" in normalized_sql
@@ -444,6 +486,7 @@ def test_governance_audit_tables_sql_creates_guardrail_audit_tables() -> None:
     assert "audit_event_id TEXT NOT NULL REFERENCES query_audit_events(audit_event_id)" in normalized_sql
     assert "rule_code TEXT NOT NULL" in normalized_sql
     assert "idx_sql_rule_hits_rule_code" in normalized_sql
+    assert "idx_query_audit_events_org_trace_id" in normalized_sql
 
 
 def test_demo_completed_query_seed_links_runtime_audit_and_evaluation_by_trace_id() -> None:

@@ -77,6 +77,8 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
 
     _columns = (
         "trace_id",
+        "org_id",
+        "user_id",
         "metric_id",
         "semantic_version_id",
         "parameters",
@@ -102,6 +104,8 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
             """
             INSERT INTO analytics.results (
                 trace_id,
+                org_id,
+                user_id,
                 metric_id,
                 semantic_version_id,
                 parameters,
@@ -113,8 +117,10 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
                 model_version,
                 explanation
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (trace_id) DO UPDATE SET
+                org_id = EXCLUDED.org_id,
+                user_id = EXCLUDED.user_id,
                 metric_id = EXCLUDED.metric_id,
                 semantic_version_id = EXCLUDED.semantic_version_id,
                 parameters = EXCLUDED.parameters,
@@ -128,6 +134,8 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
             """,
             (
                 row["trace_id"],
+                row["org_id"],
+                row["user_id"],
                 row["metric_id"],
                 row["semantic_version_id"],
                 row["parameters"],
@@ -164,6 +172,13 @@ def postgres_analytics_repository_from_psycopg(connection: Any) -> PostgresAnaly
 
 
 def _row_mapping(columns: tuple[str, ...], row: Sequence[object]) -> dict[str, object]:
-    if len(row) != len(columns):
+    if len(row) == len(columns):
+        return dict(zip(columns, row, strict=True))
+    legacy_columns = tuple(column for column in columns if column not in {"org_id", "user_id"})
+    if len(row) == len(legacy_columns):
+        mapping = dict(zip(legacy_columns, row, strict=True))
+        mapping["org_id"] = "org_legacy"
+        mapping["user_id"] = "user_legacy"
+        return mapping
+    else:
         raise ValueError("Analytics PostgreSQL row has unexpected column count.")
-    return dict(zip(columns, row, strict=True))

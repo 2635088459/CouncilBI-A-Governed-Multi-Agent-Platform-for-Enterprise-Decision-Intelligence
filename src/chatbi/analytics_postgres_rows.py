@@ -22,6 +22,8 @@ CREATE SCHEMA IF NOT EXISTS analytics;
 
 CREATE TABLE IF NOT EXISTS analytics.results (
     trace_id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy',
+    user_id TEXT NOT NULL DEFAULT 'user_legacy',
     metric_id TEXT NOT NULL,
     semantic_version_id TEXT NOT NULL,
     parameters JSONB NOT NULL,
@@ -34,17 +36,31 @@ CREATE TABLE IF NOT EXISTS analytics.results (
     explanation TEXT NOT NULL
 );
 
+ALTER TABLE analytics.results
+    ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy';
+
+ALTER TABLE analytics.results
+    ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'user_legacy';
+
 CREATE INDEX IF NOT EXISTS idx_analytics_results_metric_id
     ON analytics.results(metric_id);
 
 CREATE INDEX IF NOT EXISTS idx_analytics_results_semantic_version_id
     ON analytics.results(semantic_version_id);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_results_org_trace_id
+    ON analytics.results(org_id, trace_id);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_results_org_user_trace_id
+    ON analytics.results(org_id, user_id, trace_id);
 """.strip()
 
 
 def analytics_record_to_row(record: AnalyticsRecord) -> Mapping[str, object | None]:
     return {
         "trace_id": record.trace_id,
+        "org_id": record.org_id,
+        "user_id": record.user_id,
         "metric_id": record.metric_id,
         "semantic_version_id": record.semantic_version_id,
         "parameters": dict(record.parameters),
@@ -84,6 +100,8 @@ def analytics_record_from_row(row: Mapping[str, object]) -> AnalyticsRecord:
         semantic_version_id=_string(row, "semantic_version_id"),
         parameters=_object_mapping(row, "parameters"),
         result=result,
+        org_id=_optional_string(row, "org_id", default="org_legacy"),
+        user_id=_optional_string(row, "user_id", default="user_legacy"),
     )
 
 
@@ -175,6 +193,12 @@ def _string(row: Mapping[str, object], field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
     return value
+
+
+def _optional_string(row: Mapping[str, object], field_name: str, *, default: str) -> str:
+    if field_name not in row:
+        return default
+    return _string(row, field_name)
 
 
 def _integer(row: Mapping[str, object], field_name: str) -> int:

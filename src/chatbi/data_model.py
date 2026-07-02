@@ -676,6 +676,8 @@ def _build_analytics_result_tables() -> tuple[TableDefinition, ...]:
             retention_days=180,
             columns=(
                 ColumnDefinition("trace_id", "string", nullable=False, is_primary_key=True),
+                ColumnDefinition("org_id", "string", nullable=False),
+                ColumnDefinition("user_id", "string", nullable=False),
                 ColumnDefinition("metric_id", "string", nullable=False),
                 ColumnDefinition("semantic_version_id", "string", nullable=False),
                 ColumnDefinition("parameters", "json", nullable=False),
@@ -688,7 +690,13 @@ def _build_analytics_result_tables() -> tuple[TableDefinition, ...]:
                 ColumnDefinition("explanation", "text", nullable=False),
                 ColumnDefinition("created_at", "datetime", nullable=False),
             ),
-            indexes=(("metric_id",), ("semantic_version_id",), ("created_at",)),
+            indexes=(
+                ("metric_id",),
+                ("semantic_version_id",),
+                ("org_id", "trace_id"),
+                ("org_id", "user_id", "trace_id"),
+                ("created_at",),
+            ),
             quality_rules=(_retention_rule(180),),
         ),
     )

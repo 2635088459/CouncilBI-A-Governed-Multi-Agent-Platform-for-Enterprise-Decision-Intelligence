@@ -294,6 +294,8 @@ def test_analytics_v2_results_table_persists_method_parameters_and_forecasts() -
     assert results is not None
     assert results.domain is DataDomain.ANALYTICS_RESULTS
     assert results.primary_key_columns == ("trace_id",)
+    assert results.get_column("org_id") is not None
+    assert results.get_column("user_id") is not None
     assert results.get_column("metric_id") is not None
     assert results.get_column("semantic_version_id") is not None
     assert results.get_column("parameters") is not None
@@ -305,6 +307,8 @@ def test_analytics_v2_results_table_persists_method_parameters_and_forecasts() -
     assert results.get_column("model_version") is not None
     assert ("metric_id",) in results.indexes
     assert ("semantic_version_id",) in results.indexes
+    assert ("org_id", "trace_id") in results.indexes
+    assert ("org_id", "user_id", "trace_id") in results.indexes
     assert results.retention_days == 180
 
 

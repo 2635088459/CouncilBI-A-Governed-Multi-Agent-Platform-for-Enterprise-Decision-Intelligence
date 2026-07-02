@@ -32,6 +32,7 @@ class EvalFailureSummary:
 class EvalRunReport:
     eval_run_id: str
     eval_suite_id: str
+    org_id: str
     status: str
     total_cases: int
     passed_cases: int
@@ -45,6 +46,7 @@ class EvalRunReport:
         return {
             "eval_run_id": self.eval_run_id,
             "eval_suite_id": self.eval_suite_id,
+            "org_id": self.org_id,
             "status": self.status,
             "total_cases": self.total_cases,
             "passed_cases": self.passed_cases,
@@ -69,10 +71,11 @@ class EvalRunReport:
 def eval_run_report(
     repository: EvaluationRepository,
     eval_run_id: str,
+    org_id: str | None = None,
 ) -> EvalRunReport | None:
     """Build a report for one saved eval run."""
 
-    run = repository.run_by_id(eval_run_id)
+    run = repository.run_by_id(eval_run_id, org_id=org_id)
     if run is None:
         return None
     return _report_from_rows(
@@ -85,8 +88,9 @@ def eval_run_report(
 def require_eval_run_report(
     repository: EvaluationRepository,
     eval_run_id: str,
+    org_id: str | None = None,
 ) -> EvalRunReport:
-    report = eval_run_report(repository, eval_run_id)
+    report = eval_run_report(repository, eval_run_id, org_id=org_id)
     if report is None:
         raise KeyError(f"eval_run_id was not found: {eval_run_id}")
     return report
@@ -100,6 +104,7 @@ def _report_from_rows(
     return EvalRunReport(
         eval_run_id=run.eval_run_id,
         eval_suite_id=run.eval_suite_id,
+        org_id=run.org_id,
         status=run.status.value,
         total_cases=run.total_cases,
         passed_cases=run.passed_cases,

@@ -21,6 +21,11 @@ Every spec follows SDD + TDD: scope → numbered requirements → contracts → 
 
 Before implementation, review each spec against [Spec Review Gate](version1/spec-review-gate.md). A requirement is not implementation-ready until it maps to a type constraint, test case, benchmark, or compliance assertion. For v2 implementation, use the v2 specs below as the current source of truth.
 
+For final industrial submission, use the final-version specs as the production-readiness source of truth:
+
+- English: [final-version/en/README.en.md](final-version/en/README.en.md)
+- Chinese: [final-version/zh-CN/README.zh-CN.md](final-version/zh-CN/README.zh-CN.md)
+
 ---
 
 ## Version 1 Spec Index
@@ -57,6 +62,21 @@ Before implementation, review each spec against [Spec Review Gate](version1/spec
 
 ---
 
+## Final Version Spec Index
+
+| # | English | 中文 | System Part | Status |
+|---|---|---|---|---|
+| 01 | [Auth, RBAC, and Tenant Isolation](final-version/en/01-auth-rbac-tenant-isolation.spec.en.md) | [Auth、RBAC 与多租户隔离](final-version/zh-CN/01-auth-rbac-tenant-isolation.spec.zh-CN.md) | Users and permissions | Verified/Implemented |
+| 02 | [LLM Provider Gateway](final-version/en/02-llm-provider-gateway.spec.en.md) | [LLM Provider Gateway](final-version/zh-CN/02-llm-provider-gateway.spec.zh-CN.md) | Real LLM integration | Draft |
+| 03 | [Embedding and Vector RAG](final-version/en/03-embedding-vector-rag.spec.en.md) | [Embedding 与 Vector RAG](final-version/zh-CN/03-embedding-vector-rag.spec.zh-CN.md) | Real RAG retrieval | Draft |
+| 04 | [Data Platform and Seed Data](final-version/en/04-data-platform-and-seed.spec.en.md) | [数据平台与 Seed 数据](final-version/zh-CN/04-data-platform-and-seed.spec.zh-CN.md) | Data and test corpus | Draft |
+| 05 | [Admin Observability](final-version/en/05-admin-observability.spec.en.md) | [Admin 可观测性](final-version/zh-CN/05-admin-observability.spec.zh-CN.md) | Admin-only Spec 10 visibility | Draft |
+| 06 | [Resilience and Load Testing](final-version/en/06-resilience-and-load-testing.spec.en.md) | [韧性与压测](final-version/zh-CN/06-resilience-and-load-testing.spec.zh-CN.md) | Distributed-system readiness | Draft |
+| 07 | [Cloud and Kubernetes Deployment](final-version/en/07-cloud-kubernetes-deployment.spec.en.md) | [云端与 Kubernetes 部署](final-version/zh-CN/07-cloud-kubernetes-deployment.spec.zh-CN.md) | Cloud deployment | Draft |
+| 08 | [Final Submission Package](final-version/en/08-final-submission-package.spec.en.md) | [最终提交包](final-version/zh-CN/08-final-submission-package.spec.zh-CN.md) | Final delivery | Draft |
+
+---
+
 ## Requirement ID Convention
 
 ```
@@ -64,6 +84,7 @@ FR-XX-NNN   Functional Requirement  (e.g. FR-01-001 = spec 01, requirement 1)
 NFR-XX-NNN  Non-functional Requirement
 AC-XX-NNN   Acceptance Criterion
 TC-XX-NNN   Test Case
+FR-FVXX-NNN Final-version Functional Requirement (e.g. FR-FV01-001)
 ```
 
 ---

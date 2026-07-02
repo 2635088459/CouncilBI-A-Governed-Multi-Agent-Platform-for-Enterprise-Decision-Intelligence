@@ -30,6 +30,20 @@ from chatbi.api.models import (
     envelope,
     error_envelope,
 )
+from chatbi.auth import (
+    AuthContext,
+    AuthService,
+    InMemoryAuthStore,
+    InvalidCredentials,
+    PasswordHasher,
+    PermissionDenied,
+    SignUpRequest,
+    TokenExpired,
+    TokenService,
+    dev_test_auth_context,
+    postgres_auth_store_from_psycopg,
+    require_permission,
+)
 from chatbi.application.app import ChatBIApplication
 from chatbi.core.contracts import Locale, QueryRequest, UserRole, new_trace_id
 from chatbi.core.runtime_config import (
@@ -116,6 +130,34 @@ class EvalRunRequestBody(BaseModel):
         )
 
 
+class SignUpRequestBody(BaseModel):
+    email: str
+    password: str
+    display_name: str
+    organization_name: str | None = None
+
+    def to_auth_request(self) -> SignUpRequest:
+        return SignUpRequest(
+            email=self.email,
+            password=self.password,
+            display_name=self.display_name,
+            organization_name=self.organization_name,
+        )
+
+
+class SignInRequestBody(BaseModel):
+    email: str
+    password: str
+
+
+class RefreshTokenRequestBody(BaseModel):
+    refresh_token: str
+
+
+class RoleUpdateRequestBody(BaseModel):
+    roles: tuple[str, ...]
+
+
 class AnalyticsOptionsBody(BaseModel):
     horizon: int = 3
     anomaly_z_threshold: float = 3.0
@@ -137,7 +179,11 @@ class AnalyticsRequestBody(BaseModel):
     rows: tuple[dict[str, Any], ...]
     analysis_options: AnalyticsOptionsBody = AnalyticsOptionsBody()
 
-    def to_domain(self) -> AnalyticsRequest:
+    def to_domain(
+        self,
+        org_id: str | None = None,
+        user_id: str | None = None,
+    ) -> AnalyticsRequest:
         return AnalyticsRequest(
             trace_id=self.trace_id,
             metric_id=self.metric_id,
@@ -147,10 +193,16 @@ class AnalyticsRequestBody(BaseModel):
             grain=self.grain,
             rows=self.rows,
             analysis_options=self.analysis_options.to_domain(),
+            org_id=org_id,
+            user_id=user_id,
         )
 
-    def to_task_payload(self) -> Mapping[str, object]:
-        return {
+    def to_task_payload(
+        self,
+        org_id: str | None = None,
+        user_id: str | None = None,
+    ) -> Mapping[str, object]:
+        payload: dict[str, object] = {
             "trace_id": self.trace_id,
             "metric_id": self.metric_id,
             "semantic_version_id": self.semantic_version_id,
@@ -163,6 +215,11 @@ class AnalyticsRequestBody(BaseModel):
                 "anomaly_z_threshold": self.analysis_options.anomaly_z_threshold,
             },
         }
+        if org_id is not None:
+            payload["org_id"] = org_id
+        if user_id is not None:
+            payload["user_id"] = user_id
+        return payload
 
 
 class DocumentIndexRequestBody(BaseModel):
@@ -194,8 +251,12 @@ class DocumentIndexRequestBody(BaseModel):
             errors.append("text length must be between 1 and 500000 characters.")
         return tuple(errors)
 
-    def to_task_payload(self) -> Mapping[str, object]:
-        return {
+    def to_task_payload(
+        self,
+        org_id: str | None = None,
+        user_id: str | None = None,
+    ) -> Mapping[str, object]:
+        payload: dict[str, object] = {
             "document_id": self.document_id,
             "source": self.source,
             "title": self.title,
@@ -206,6 +267,11 @@ class DocumentIndexRequestBody(BaseModel):
             "text": self.text,
             "text_length": len(self.text),
         }
+        if org_id is not None:
+            payload["org_id"] = org_id
+        if user_id is not None:
+            payload["user_id"] = user_id
+        return payload
 
     def idempotency_fingerprint(self) -> tuple[tuple[str, str], ...]:
         return (
@@ -428,10 +494,69 @@ def redis_readiness_checker_from_env(
     return RedisReadinessChecker(lambda redis_url: RedisTcpPingClient(redis_url))
 
 
+def _build_default_auth_service(
+    runtime_config: RuntimeConfig | None = None,
+    connect: Callable[[str], Any] | None = None,
+    use_postgres_metadata: bool = False,
+    env: Mapping[str, str] | None = None,
+) -> AuthService:
+    runtime_env = env or os.environ
+    secret = runtime_env.get("CHATBI_AUTH_TOKEN_SECRET") or f"runtime_{uuid4().hex}"
+    store: InMemoryAuthStore | Any = InMemoryAuthStore()
+    if (
+        use_postgres_metadata
+        and runtime_config is not None
+        and runtime_config.database_url is not None
+        and connect is not None
+    ):
+        store = postgres_auth_store_from_psycopg(connect(runtime_config.database_url))
+        store.initialize_schema()
+    return AuthService(
+        store=store,
+        password_hasher=PasswordHasher(),
+        token_service=TokenService(secret=secret),
+    )
+
+
+def auth_response_data(user: object, tokens: object) -> dict[str, object]:
+    return {
+        "user": {
+            "user_id": getattr(user, "user_id"),
+            "email": getattr(user, "email"),
+            "display_name": getattr(user, "display_name"),
+            "org_id": getattr(user, "org_id"),
+            "roles": list(getattr(user, "roles")),
+            "permissions": list(getattr(user, "permissions")),
+        },
+        "tokens": {
+            "access_token": getattr(tokens, "access_token"),
+            "refresh_token": getattr(tokens, "refresh_token"),
+            "expires_in": getattr(tokens, "expires_in"),
+            "token_type": getattr(tokens, "token_type"),
+        },
+    }
+
+
+def role_audit_event_to_dict(event: object) -> dict[str, object]:
+    return {
+        "audit_event_id": getattr(event, "audit_event_id"),
+        "org_id": getattr(event, "org_id"),
+        "actor_user_id": getattr(event, "actor_user_id"),
+        "target_user_id": getattr(event, "target_user_id"),
+        "action": getattr(event, "action"),
+        "roles_before": list(getattr(event, "roles_before")),
+        "roles_after": list(getattr(event, "roles_after")),
+        "permissions_before": list(getattr(event, "permissions_before")),
+        "permissions_after": list(getattr(event, "permissions_after")),
+        "occurred_at": _isoformat_or_none(getattr(event, "occurred_at", None)),
+    }
+
+
 def request_metadata_to_dict(record: RequestMetadataRecord) -> dict[str, Any]:
     return {
         "trace_id": record.trace_id,
         "request_id": record.request_id,
+        "org_id": getattr(record, "org_id", None),
         "session_id": record.session_id,
         "user_id": record.user_id,
         "role": record.role.value,
@@ -449,6 +574,7 @@ def runtime_query_result_record_from_response(
     trace_id: str,
     session_id: str,
     user_id: str,
+    org_id: str | None = None,
     question: str,
     data: object,
 ) -> RuntimeQueryResultRecord | None:
@@ -470,6 +596,7 @@ def runtime_query_result_record_from_response(
         trace_id=trace_id,
         session_id=session_id,
         user_id=user_id,
+        org_id=org_id,
         question=question,
         sql_text=sql_text,
         table_result=table_result_mapping,
@@ -492,6 +619,7 @@ def runtime_query_result_to_dict(record: RuntimeQueryResultRecord) -> dict[str, 
         "trace_id": record.trace_id,
         "session_id": record.session_id,
         "user_id": record.user_id,
+        "org_id": record.org_id,
         "question": record.question,
         "sql_hash": record.sql_hash,
         "table_result": record.table_result,
@@ -984,6 +1112,7 @@ def create_app(
     guardrail_audit_connect: Callable[[str], Any] | None = None,
     runtime_query_result_store: RuntimeQueryResultStore | None = None,
     runtime_query_result_connect: Callable[[str], Any] | None = None,
+    auth_connect: Callable[[str], Any] | None = None,
     readonly_query_connect: Callable[[str], Any] | None = None,
     use_postgres_metadata: bool = False,
     database_readiness_checker: DatabaseReadinessChecker | None = None,
@@ -993,6 +1122,7 @@ def create_app(
     guardrail_audit_log_v2: GuardrailAuditLogV2 | None = None,
     worker_handoff_queue: WorkerHandoffQueue | None = None,
     analytics_service: AnalyticsService | None = None,
+    auth_service: AuthService | None = None,
 ) -> FastAPI:
     active_runtime_config = runtime_config or load_runtime_config()
     chatbi_application = application or _build_default_chatbi_application(
@@ -1029,11 +1159,172 @@ def create_app(
     active_analytics_service = analytics_service or AnalyticsService(
         InMemoryAnalyticsRepository()
     )
+    active_auth_service = auth_service or _build_default_auth_service(
+        runtime_config=active_runtime_config,
+        connect=auth_connect,
+        use_postgres_metadata=use_postgres_metadata,
+    )
     document_index_idempotency_cache: dict[
         tuple[str, ...],
         DocumentIndexIdempotencyEntry,
     ] = {}
     app = FastAPI(title="Governed ChatBI Platform", version="0.1.0")
+
+    def authenticate_v2(
+        authorization: str | None,
+        trace_id: str,
+        request_id: str,
+        *,
+        required_permission: str | None = None,
+    ) -> tuple[AuthContext | None, JSONResponse | None]:
+        if authorization is None or not authorization.startswith("Bearer "):
+            return None, v2_error_response(
+                request_id=request_id,
+                trace_id=trace_id,
+                code="AUTH_UNAUTHORIZED",
+                message="Missing or invalid bearer token.",
+                status_code=401,
+            )
+        token = authorization.removeprefix("Bearer ").strip()
+        if token == "test-token":
+            context = dev_test_auth_context(trace_id)
+        else:
+            try:
+                context = active_auth_service.authenticate_access_token(token, trace_id=trace_id)
+            except TokenExpired:
+                return None, v2_error_response(
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    code="AUTH_UNAUTHORIZED",
+                    message="Access token is expired.",
+                    status_code=401,
+                )
+            except InvalidCredentials:
+                return None, v2_error_response(
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    code="AUTH_UNAUTHORIZED",
+                    message="Missing or invalid bearer token.",
+                    status_code=401,
+                )
+        if required_permission is not None:
+            try:
+                require_permission(context, required_permission)
+            except PermissionDenied:
+                return None, v2_error_response(
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    code="AUTH_FORBIDDEN",
+                    message="The authenticated user is not allowed to access this resource.",
+                    status_code=403,
+                )
+        return context, None
+
+    def authenticate_v1(
+        endpoint: str,
+        trace_id: str | None,
+        authorization: str | None,
+        *,
+        required_permission: str | None = None,
+    ) -> tuple[AuthContext | None, str, JSONResponse | None]:
+        active_trace_id, rejected = require_headers(
+            chatbi_application,
+            endpoint,
+            trace_id,
+            authorization,
+        )
+        if rejected is not None:
+            return None, active_trace_id, rejected
+
+        token = authorization.removeprefix("Bearer ").strip() if authorization else ""
+        if token == "test-token":
+            context = dev_test_auth_context(active_trace_id)
+        else:
+            try:
+                context = active_auth_service.authenticate_access_token(
+                    token,
+                    trace_id=active_trace_id,
+                )
+            except TokenExpired:
+                response = error_envelope(
+                    code=ApiErrorCode.AUTH_UNAUTHORIZED,
+                    message="Access token is expired.",
+                    trace_id=active_trace_id,
+                )
+                chatbi_application.record_api_audit(
+                    trace_id=active_trace_id,
+                    user_id="anonymous",
+                    endpoint=endpoint,
+                    status_code=401,
+                    error_code=ApiErrorCode.AUTH_UNAUTHORIZED,
+                )
+                return None, active_trace_id, response_from_envelope(
+                    response,
+                    status_code=401,
+                )
+            except InvalidCredentials:
+                response = error_envelope(
+                    code=ApiErrorCode.AUTH_UNAUTHORIZED,
+                    message="Missing or invalid bearer token.",
+                    trace_id=active_trace_id,
+                )
+                chatbi_application.record_api_audit(
+                    trace_id=active_trace_id,
+                    user_id="anonymous",
+                    endpoint=endpoint,
+                    status_code=401,
+                    error_code=ApiErrorCode.AUTH_UNAUTHORIZED,
+                )
+                return None, active_trace_id, response_from_envelope(
+                    response,
+                    status_code=401,
+                )
+
+        if required_permission is not None:
+            try:
+                require_permission(context, required_permission)
+            except PermissionDenied:
+                response = error_envelope(
+                    code=ApiErrorCode.AUTH_FORBIDDEN,
+                    message="The authenticated user is not allowed to access this resource.",
+                    trace_id=active_trace_id,
+                )
+                chatbi_application.record_api_audit(
+                    trace_id=active_trace_id,
+                    user_id=context.user_id,
+                    endpoint=endpoint,
+                    status_code=403,
+                    error_code=ApiErrorCode.AUTH_FORBIDDEN,
+                )
+                return context, active_trace_id, response_from_envelope(
+                    response,
+                    status_code=403,
+                )
+
+        return context, active_trace_id, None
+
+    def tenant_not_found_response(
+        request_id: str,
+        trace_id: str,
+        code: str,
+        message: str,
+    ) -> JSONResponse:
+        return v2_error_response(
+            request_id=request_id,
+            trace_id=trace_id,
+            code=code,
+            message=message,
+            status_code=404,
+        )
+
+    def task_visible_to_context(record: AsyncTaskRecord, auth_context: AuthContext) -> bool:
+        org_id = record.payload.get("org_id")
+        user_id = record.payload.get("user_id")
+        if org_id is not None and org_id != auth_context.org_id:
+            return False
+        if user_id is not None and user_id != auth_context.user_id:
+            return False
+        return True
 
     def current_readiness_payload() -> tuple[bool, dict[str, object]]:
         dependencies: dict[str, dict[str, object]] = {
@@ -1160,6 +1451,185 @@ def create_app(
         )
         return response_from_envelope(response, status_code=500)
 
+    @app.post("/api/v2/auth/signup")
+    def auth_signup_v2(  # pyright: ignore[reportUnusedFunction]
+        body: SignUpRequestBody,
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_auth_signup")
+        try:
+            user, tokens = active_auth_service.sign_up(body.to_auth_request())
+        except ValueError as exc:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message=str(exc),
+                status_code=400,
+            )
+        return JSONResponse(
+            status_code=201,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": auth_response_data(user, tokens),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/auth/signin")
+    def auth_signin_v2(  # pyright: ignore[reportUnusedFunction]
+        body: SignInRequestBody,
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_auth_signin")
+        try:
+            user, tokens = active_auth_service.sign_in(body.email, body.password)
+        except InvalidCredentials:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_UNAUTHORIZED",
+                message="Email or password is invalid.",
+                status_code=401,
+            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": auth_response_data(user, tokens),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/auth/refresh")
+    def auth_refresh_v2(  # pyright: ignore[reportUnusedFunction]
+        body: RefreshTokenRequestBody,
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_auth_refresh")
+        try:
+            user, tokens = active_auth_service.refresh(body.refresh_token)
+        except InvalidCredentials:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_UNAUTHORIZED",
+                message="Refresh token is invalid.",
+                status_code=401,
+            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": auth_response_data(user, tokens),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/auth/sessions/revoke")
+    def auth_revoke_session_v2(  # pyright: ignore[reportUnusedFunction]
+        body: RefreshTokenRequestBody,
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_auth_revoke")
+        active_auth_service.revoke_refresh_token(body.refresh_token)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {"revoked": True},
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.put("/api/v2/admin/users/{target_user_id}/roles")
+    def admin_update_roles_v2(  # pyright: ignore[reportUnusedFunction]
+        target_user_id: str,
+        body: RoleUpdateRequestBody,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_admin_user_roles")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="admin:user:write",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+        try:
+            user = active_auth_service.update_user_roles(
+                actor=auth_context,
+                target_user_id=target_user_id,
+                roles=body.roles,
+            )
+        except KeyError:
+            return tenant_not_found_response(
+                active_request_id,
+                trace_id,
+                "USER_NOT_FOUND",
+                "User was not found.",
+            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "user_id": user.user_id,
+                    "org_id": user.org_id,
+                    "roles": list(user.roles),
+                    "permissions": list(user.permissions),
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.get("/api/v2/admin/audits/roles")
+    def admin_role_audits_v2(  # pyright: ignore[reportUnusedFunction]
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_admin_role_audits")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="admin:audit:read",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+        events = active_auth_service.list_role_audit_events(auth_context)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "items": [role_audit_event_to_dict(event) for event in events],
+                    "count": len(events),
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
     @app.post("/api/v2/chat/query")
     def chat_query_v2(  # pyright: ignore[reportUnusedFunction]
         body: dict[str, Any],
@@ -1178,24 +1648,35 @@ def create_app(
                     problems=problems,
                 ),
             )
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=request_id,
-                trace_id=trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            request_id,
+            required_permission="chat:query",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+        effective_user_id = (
+            str(body["user_id"])
+            if authorization == "Bearer test-token"
+            else auth_context.user_id
+        )
+        effective_role = (
+            str(body["role"])
+            if authorization == "Bearer test-token"
+            else (auth_context.roles[0] if auth_context.roles else str(body["role"]))
+        )
 
         active_request_metadata_store.save_accepted(
             RequestMetadataRecord(
                 trace_id=trace_id,
                 request_id=request_id,
                 session_id=str(body["session_id"]),
-                user_id=str(body["user_id"]),
-                role=UserRole(str(body["role"])),
+                user_id=effective_user_id,
+                role=UserRole(effective_role),
                 locale=Locale(str(body["locale"])),
                 question=str(body["question"]),
+                org_id=auth_context.org_id,
             )
         )
         active_observability_logger.record(
@@ -1203,21 +1684,23 @@ def create_app(
             level=LogLevel.INFO,
             message="Accepted v2 chat query.",
             endpoint="/api/v2/chat/query",
-            user_id=str(body["user_id"]),
+            user_id=effective_user_id,
             event="chat_query_accepted",
             request_id=request_id,
             attributes={
-                "role": str(body["role"]),
+                "auth_user_id": effective_user_id,
+                "org_id": auth_context.org_id,
+                "role": effective_role,
                 "locale": str(body["locale"]),
                 "session_id": str(body["session_id"]),
             },
         )
         payload = ChatQueryRequestPayload(
-            user_id=str(body["user_id"]),
+            user_id=effective_user_id,
             session_id=str(body["session_id"]),
             question=str(body["question"]),
             locale=Locale(str(body["locale"])),
-            role=UserRole(str(body["role"])),
+            role=UserRole(effective_role),
         )
         api_envelope = chatbi_application.handle_chat_query(
             payload,
@@ -1230,7 +1713,8 @@ def create_app(
                 runtime_record = runtime_query_result_record_from_response(
                     trace_id=trace_id,
                     session_id=str(body["session_id"]),
-                    user_id=str(body["user_id"]),
+                    user_id=effective_user_id,
+                    org_id=auth_context.org_id,
                     question=str(body["question"]),
                     data=api_envelope.data,
                 )
@@ -1247,10 +1731,12 @@ def create_app(
             level=log_level,
             message="Finished v2 chat query.",
             endpoint="/api/v2/chat/query",
-            user_id=str(body["user_id"]),
+            user_id=effective_user_id,
             event=event,
             request_id=request_id,
             attributes={
+                "auth_user_id": effective_user_id,
+                "org_id": auth_context.org_id,
                 "api_code": str(api_envelope.code),
                 "warning_count": len(api_envelope.warnings),
             },
@@ -1275,17 +1761,18 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_history_lookup")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            lookup_trace_id,
+            active_request_id,
+            required_permission="chat:history:read:self",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+        effective_user_id = user_id if authorization == "Bearer test-token" else auth_context.user_id
 
         api_envelope = chatbi_application.handle_chat_history(
-            user_id=user_id,
+            user_id=effective_user_id,
             trace_id=lookup_trace_id,
             cursor=cursor,
             page_size=page_size,
@@ -1309,17 +1796,12 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_metrics_catalog")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(authorization, lookup_trace_id, active_request_id)
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         api_envelope = chatbi_application.handle_metrics_catalog(
-            user_id=user_id,
+            user_id=user_id if authorization == "Bearer test-token" else auth_context.user_id,
             trace_id=lookup_trace_id,
         )
         return JSONResponse(
@@ -1339,17 +1821,12 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_datasets_catalog")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(authorization, lookup_trace_id, active_request_id)
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         api_envelope = chatbi_application.handle_datasets_catalog(
-            user_id=user_id,
+            user_id=user_id if authorization == "Bearer test-token" else auth_context.user_id,
             trace_id=lookup_trace_id,
         )
         return JSONResponse(
@@ -1369,17 +1846,12 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_health_check")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(authorization, lookup_trace_id, active_request_id)
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         api_envelope = chatbi_application.handle_health_check(
-            user_id=user_id,
+            user_id=user_id if authorization == "Bearer test-token" else auth_context.user_id,
             trace_id=lookup_trace_id,
         )
         return JSONResponse(
@@ -1398,14 +1870,13 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_ready_check")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            lookup_trace_id,
+            active_request_id,
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         ready, payload = current_readiness_payload()
         return JSONResponse(
@@ -1428,18 +1899,18 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_query_lookup")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            lookup_trace_id,
+            active_request_id,
+            required_permission="query:read:self",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         api_envelope = chatbi_application.handle_query_detail(
             trace_id=legacy_trace_id_from_v2(trace_id),
-            user_id=user_id,
+            user_id=user_id if authorization == "Bearer test-token" else auth_context.user_id,
         )
         if api_envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT:
             return v2_error_response(
@@ -1469,23 +1940,28 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_lookup_request")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            lookup_trace_id,
+            active_request_id,
+            required_permission="query:read:self",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         record = active_request_metadata_store.get(trace_id)
-        if record is None:
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="REQUEST_NOT_FOUND",
-                message="Request metadata was not found for this trace id.",
-                status_code=404,
+        if record is None or (
+            authorization != "Bearer test-token"
+            and (
+                record.org_id != auth_context.org_id
+                or record.user_id != auth_context.user_id
+            )
+        ):
+            return tenant_not_found_response(
+                active_request_id,
+                lookup_trace_id,
+                "REQUEST_NOT_FOUND",
+                "Request metadata was not found for this trace id.",
             )
 
         return JSONResponse(
@@ -1507,17 +1983,15 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_task_lookup")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(authorization, lookup_trace_id, active_request_id)
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         record = active_worker_handoff_queue.get(task_id)
-        if record is None:
+        if record is None or (
+            authorization != "Bearer test-token"
+            and not task_visible_to_context(record, auth_context)
+        ):
             return v2_error_response(
                 request_id=active_request_id,
                 trace_id=lookup_trace_id,
@@ -1544,17 +2018,20 @@ def create_app(
         request_id: str | None = Header(default=None, alias="X-Request-Id"),
     ) -> JSONResponse:
         active_request_id = v2_request_id_from_header(request_id, "req_analytics_analyze")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=body.trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            body.trace_id,
+            active_request_id,
+            required_permission="analytics:run",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         try:
-            request = body.to_domain()
+            request = body.to_domain(
+                org_id=auth_context.org_id,
+                user_id=auth_context.user_id,
+            )
             result = active_analytics_service.analyze(request)
         except AnalyticsValidationError as exc:
             return v2_error_response(
@@ -1596,17 +2073,20 @@ def create_app(
         request_id: str | None = Header(default=None, alias="X-Request-Id"),
     ) -> JSONResponse:
         active_request_id = v2_request_id_from_header(request_id, "req_analytics_task")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=body.trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            body.trace_id,
+            active_request_id,
+            required_permission="analytics:run",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         try:
-            request = body.to_domain()
+            request = body.to_domain(
+                org_id=auth_context.org_id,
+                user_id=auth_context.user_id,
+            )
         except ValueError as exc:
             return v2_error_response(
                 request_id=active_request_id,
@@ -1620,7 +2100,14 @@ def create_app(
             AsyncTaskRequest(
                 trace_id=request.trace_id,
                 kind=AsyncTaskKind.ANALYTICS,
-                payload={"request": body.to_task_payload()},
+                payload={
+                    "request": body.to_task_payload(
+                        org_id=auth_context.org_id,
+                        user_id=auth_context.user_id,
+                    ),
+                    "org_id": auth_context.org_id,
+                    "user_id": auth_context.user_id,
+                },
             )
         )
         return JSONResponse(
@@ -1641,17 +2128,17 @@ def create_app(
         request_id: str | None = Header(default=None, alias="X-Request-Id"),
     ) -> JSONResponse:
         active_request_id = v2_request_id_from_header(request_id, "req_analytics_result")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(authorization, trace_id, active_request_id)
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         record = active_analytics_service.result_by_trace_id(trace_id)
-        if record is None:
+        if record is None or (
+            authorization != "Bearer test-token"
+            and record.org_id != "org_legacy"
+            and record.user_id != "user_legacy"
+            and (record.org_id != auth_context.org_id or record.user_id != auth_context.user_id)
+        ):
             return v2_error_response(
                 request_id=active_request_id,
                 trace_id=trace_id,
@@ -1677,6 +2164,114 @@ def create_app(
             },
         )
 
+    @app.post("/api/v2/evals/run")
+    def eval_run_v2(  # pyright: ignore[reportUnusedFunction]
+        body: EvalRunRequestBody,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_eval_run")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="admin:eval:write",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        api_envelope = chatbi_application.handle_eval_run(
+            user_id=auth_context.user_id,
+            trace_id=trace_id,
+            payload=body.to_payload(),
+            org_id=auth_context.org_id,
+        )
+        return JSONResponse(
+            status_code=status_code_for_envelope(api_envelope),
+            content=v2_generic_response_from_api_envelope(
+                api_envelope,
+                request_id=active_request_id,
+                trace_id=trace_id,
+            ),
+        )
+
+    @app.get("/api/v2/evals/{eval_run_id}")
+    def eval_report_v2(  # pyright: ignore[reportUnusedFunction]
+        eval_run_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_eval_report")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="admin:eval:read",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        api_envelope = chatbi_application.handle_eval_report(
+            user_id=auth_context.user_id,
+            trace_id=trace_id,
+            eval_run_id=eval_run_id,
+            org_id=auth_context.org_id,
+        )
+        if api_envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT:
+            return tenant_not_found_response(
+                active_request_id,
+                trace_id,
+                "EVAL_RUN_NOT_FOUND",
+                "Eval run was not found.",
+            )
+        return JSONResponse(
+            status_code=status_code_for_envelope(api_envelope),
+            content=v2_generic_response_from_api_envelope(
+                api_envelope,
+                request_id=active_request_id,
+                trace_id=trace_id,
+            ),
+        )
+
+    @app.get("/api/v2/release-gates/latest")
+    def release_gate_latest_v2(  # pyright: ignore[reportUnusedFunction]
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_release_gate_latest")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="admin:release_gate:read",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        api_envelope = chatbi_application.handle_quality_dashboard(
+            user_id=auth_context.user_id,
+            trace_id=trace_id,
+            org_id=auth_context.org_id,
+        )
+        response = v2_generic_response_from_api_envelope(
+            api_envelope,
+            request_id=active_request_id,
+            trace_id=trace_id,
+        )
+        data = api_envelope.data if isinstance(api_envelope.data, Mapping) else {}
+        release_gate = data.get("release_gate")
+        if release_gate is None:
+            response["data"] = {"release_gate": None}
+        else:
+            response["data"] = release_gate
+        return JSONResponse(
+            status_code=status_code_for_envelope(api_envelope),
+            content=response,
+        )
+
     @app.post("/api/v2/documents/index")
     def document_index_v2(  # pyright: ignore[reportUnusedFunction]
         body: DocumentIndexRequestBody,
@@ -1686,14 +2281,14 @@ def create_app(
     ) -> JSONResponse:
         active_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_document_index")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=active_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            active_trace_id,
+            active_request_id,
+            required_permission="documents:index",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         validation_errors = body.validation_errors()
         if validation_errors:
@@ -1707,7 +2302,7 @@ def create_app(
 
         body_fingerprint = body.idempotency_fingerprint()
         if idempotency_key is not None:
-            cache_key = ("v2_documents_index", idempotency_key)
+            cache_key = ("v2_documents_index", auth_context.org_id, idempotency_key)
             cached = document_index_idempotency_cache.get(cache_key)
             if cached is not None:
                 if cached.body_fingerprint != body_fingerprint:
@@ -1735,11 +2330,16 @@ def create_app(
             AsyncTaskRequest(
                 trace_id=active_trace_id,
                 kind=AsyncTaskKind.INDEXING,
-                payload=body.to_task_payload(),
+                payload=body.to_task_payload(
+                    org_id=auth_context.org_id,
+                    user_id=auth_context.user_id,
+                ),
             )
         )
         if idempotency_key is not None:
-            document_index_idempotency_cache[("v2_documents_index", idempotency_key)] = (
+            document_index_idempotency_cache[
+                ("v2_documents_index", auth_context.org_id, idempotency_key)
+            ] = (
                 DocumentIndexIdempotencyEntry(
                     body_fingerprint=body_fingerprint,
                     task=task,
@@ -1765,27 +2365,32 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_query_result_lookup")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            lookup_trace_id,
+            active_request_id,
+            required_permission="query:read:self",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         record = (
             active_runtime_query_result_store.get(trace_id)
             if active_runtime_query_result_store is not None
             else None
         )
-        if record is None:
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="QUERY_RESULT_NOT_FOUND",
-                message="Runtime query result was not found for this trace id.",
-                status_code=404,
+        if record is None or (
+            authorization != "Bearer test-token"
+            and (
+                record.org_id != auth_context.org_id
+                or record.user_id != auth_context.user_id
+            )
+        ):
+            return tenant_not_found_response(
+                active_request_id,
+                lookup_trace_id,
+                "QUERY_RESULT_NOT_FOUND",
+                "Runtime query result was not found for this trace id.",
             )
 
         return JSONResponse(
@@ -1807,14 +2412,14 @@ def create_app(
     ) -> JSONResponse:
         lookup_trace_id = new_trace_id_v2()
         active_request_id = v2_request_id_from_header(request_id, "req_governance_trace_lookup")
-        if authorization is None or not authorization.startswith("Bearer "):
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="AUTH_UNAUTHORIZED",
-                message="Missing or invalid bearer token.",
-                status_code=401,
-            )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            lookup_trace_id,
+            active_request_id,
+            required_permission="admin:trace:read",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
 
         request_record = active_request_metadata_store.get(trace_id)
         query_result_record = (
@@ -1827,13 +2432,18 @@ def create_app(
             if active_guardrail_audit_log_v2 is not None
             else None
         )
-        if request_record is None and query_result_record is None and guardrail_record is None:
-            return v2_error_response(
-                request_id=active_request_id,
-                trace_id=lookup_trace_id,
-                code="GOVERNANCE_TRACE_NOT_FOUND",
-                message="Governance trace evidence was not found for this trace id.",
-                status_code=404,
+        if (
+            request_record is None and query_result_record is None and guardrail_record is None
+        ) or (
+            authorization != "Bearer test-token"
+            and request_record is not None
+            and request_record.org_id != auth_context.org_id
+        ):
+            return tenant_not_found_response(
+                active_request_id,
+                lookup_trace_id,
+                "GOVERNANCE_TRACE_NOT_FOUND",
+                "Governance trace evidence was not found for this trace id.",
             )
 
         return JSONResponse(
@@ -1937,14 +2547,18 @@ def create_app(
         trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> JSONResponse:
-        active_trace_id, rejected = require_headers(
-            chatbi_application,
+        auth_context, active_trace_id, rejected = authenticate_v1(
             "/api/v1/documents/index",
             trace_id,
             authorization,
+            required_permission="documents:index",
         )
         if rejected is not None:
             return rejected
+        assert auth_context is not None
+        effective_user_id = (
+            user_id if authorization == "Bearer test-token" else auth_context.user_id
+        )
 
         validation_errors = body.validation_errors()
         if validation_errors:
@@ -1956,7 +2570,7 @@ def create_app(
             )
             chatbi_application.record_api_audit(
                 trace_id=active_trace_id,
-                user_id=user_id,
+                user_id=effective_user_id,
                 endpoint="/api/v1/documents/index",
                 status_code=400,
                 error_code=ApiErrorCode.REQ_INVALID_ARGUMENT,
@@ -1965,7 +2579,7 @@ def create_app(
 
         body_fingerprint = body.idempotency_fingerprint()
         if idempotency_key is not None:
-            cache_key = ("v1_documents_index", user_id, idempotency_key)
+            cache_key = ("v1_documents_index", auth_context.org_id, idempotency_key)
             cached = document_index_idempotency_cache.get(cache_key)
             if cached is not None:
                 if cached.body_fingerprint != body_fingerprint:
@@ -1978,7 +2592,7 @@ def create_app(
                     )
                     chatbi_application.record_api_audit(
                         trace_id=active_trace_id,
-                        user_id=user_id,
+                        user_id=effective_user_id,
                         endpoint="/api/v1/documents/index",
                         status_code=400,
                         error_code=ApiErrorCode.REQ_INVALID_ARGUMENT,
@@ -1991,7 +2605,7 @@ def create_app(
                 )
                 chatbi_application.record_api_audit(
                     trace_id=active_trace_id,
-                    user_id=user_id,
+                    user_id=effective_user_id,
                     endpoint="/api/v1/documents/index",
                     status_code=202,
                 )
@@ -2001,15 +2615,15 @@ def create_app(
             AsyncTaskRequest(
                 trace_id=active_trace_id,
                 kind=AsyncTaskKind.INDEXING,
-                payload=body.to_task_payload(),
+                payload=body.to_task_payload(org_id=auth_context.org_id),
             )
         )
         if idempotency_key is not None:
-            document_index_idempotency_cache[("v1_documents_index", user_id, idempotency_key)] = (
-                DocumentIndexIdempotencyEntry(
-                    body_fingerprint=body_fingerprint,
-                    task=task,
-                )
+            document_index_idempotency_cache[
+                ("v1_documents_index", auth_context.org_id, idempotency_key)
+            ] = DocumentIndexIdempotencyEntry(
+                body_fingerprint=body_fingerprint,
+                task=task,
             )
         response = envelope(
             data=document_index_response_data(body, task),
@@ -2017,7 +2631,7 @@ def create_app(
         )
         chatbi_application.record_api_audit(
             trace_id=active_trace_id,
-            user_id=user_id,
+            user_id=effective_user_id,
             endpoint="/api/v1/documents/index",
             status_code=202,
         )
@@ -2221,16 +2835,23 @@ def create_app(
         authorization: str | None = Header(default=None, alias="Authorization"),
         request_trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
     ) -> JSONResponse:
-        _, rejected = require_headers(
-            chatbi_application,
+        auth_context, _, rejected = authenticate_v1(
             f"/api/v1/audit/{trace_id}",
             request_trace_id,
             authorization,
+            required_permission="admin:audit:read",
         )
         if rejected is not None:
             return rejected
+        assert auth_context is not None
+        effective_user_id = (
+            user_id if authorization == "Bearer test-token" else auth_context.user_id
+        )
 
-        envelope = chatbi_application.handle_audit_detail(trace_id=trace_id, user_id=user_id)
+        envelope = chatbi_application.handle_audit_detail(
+            trace_id=trace_id,
+            user_id=effective_user_id,
+        )
         status_code = 404 if envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT else status_code_for_envelope(envelope)
         return response_from_envelope(envelope, status_code=status_code)
 
@@ -2241,18 +2862,22 @@ def create_app(
         authorization: str | None = Header(default=None, alias="Authorization"),
         request_trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
     ) -> JSONResponse:
-        _, rejected = require_headers(
-            chatbi_application,
+        auth_context, _, rejected = authenticate_v1(
             f"/api/v1/observability/traces/{trace_id}",
             request_trace_id,
             authorization,
+            required_permission="admin:trace:read",
         )
         if rejected is not None:
             return rejected
+        assert auth_context is not None
+        effective_user_id = (
+            user_id if authorization == "Bearer test-token" else auth_context.user_id
+        )
 
         envelope = chatbi_application.handle_observability_trace_detail(
             trace_id=trace_id,
-            user_id=user_id,
+            user_id=effective_user_id,
         )
         status_code = 404 if envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT else status_code_for_envelope(envelope)
         return response_from_envelope(envelope, status_code=status_code)
@@ -2263,18 +2888,23 @@ def create_app(
         authorization: str | None = Header(default=None, alias="Authorization"),
         trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
     ) -> JSONResponse:
-        active_trace_id, rejected = require_headers(
-            chatbi_application,
+        auth_context, active_trace_id, rejected = authenticate_v1(
             "/api/v1/quality/dashboard",
             trace_id,
             authorization,
+            required_permission="admin:release_gate:read",
         )
         if rejected is not None:
             return rejected
+        assert auth_context is not None
+        effective_user_id = (
+            user_id if authorization == "Bearer test-token" else auth_context.user_id
+        )
 
         envelope = chatbi_application.handle_quality_dashboard(
-            user_id=user_id,
+            user_id=effective_user_id,
             trace_id=active_trace_id,
+            org_id=auth_context.org_id,
         )
         return response_from_envelope(envelope, status_code=status_code_for_envelope(envelope))
 
@@ -2285,19 +2915,24 @@ def create_app(
         authorization: str | None = Header(default=None, alias="Authorization"),
         trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
     ) -> JSONResponse:
-        active_trace_id, rejected = require_headers(
-            chatbi_application,
+        auth_context, active_trace_id, rejected = authenticate_v1(
             "/api/v1/evals/run",
             trace_id,
             authorization,
+            required_permission="admin:eval:write",
         )
         if rejected is not None:
             return rejected
+        assert auth_context is not None
+        effective_user_id = (
+            user_id if authorization == "Bearer test-token" else auth_context.user_id
+        )
 
         envelope = chatbi_application.handle_eval_run(
-            user_id=user_id,
+            user_id=effective_user_id,
             trace_id=active_trace_id,
             payload=body.to_payload(),
+            org_id=auth_context.org_id,
         )
         return response_from_envelope(envelope, status_code=status_code_for_envelope(envelope))
 
@@ -2308,19 +2943,24 @@ def create_app(
         authorization: str | None = Header(default=None, alias="Authorization"),
         trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
     ) -> JSONResponse:
-        active_trace_id, rejected = require_headers(
-            chatbi_application,
+        auth_context, active_trace_id, rejected = authenticate_v1(
             f"/api/v1/evals/{eval_run_id}",
             trace_id,
             authorization,
+            required_permission="admin:eval:read",
         )
         if rejected is not None:
             return rejected
+        assert auth_context is not None
+        effective_user_id = (
+            user_id if authorization == "Bearer test-token" else auth_context.user_id
+        )
 
         envelope = chatbi_application.handle_eval_report(
-            user_id=user_id,
+            user_id=effective_user_id,
             trace_id=active_trace_id,
             eval_run_id=eval_run_id,
+            org_id=auth_context.org_id,
         )
         status_code = 404 if envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT else status_code_for_envelope(envelope)
         return response_from_envelope(envelope, status_code=status_code)

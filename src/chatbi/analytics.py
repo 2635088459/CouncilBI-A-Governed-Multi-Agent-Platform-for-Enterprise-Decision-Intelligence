@@ -52,6 +52,8 @@ class AnalyticsRequest:
     grain: AnalyticsGrain
     rows: Sequence[Mapping[str, object]]
     analysis_options: AnalyticsOptions = field(default_factory=AnalyticsOptions)
+    org_id: str | None = None
+    user_id: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -64,6 +66,10 @@ class AnalyticsRequest:
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field_name} is required")
+        if self.org_id is not None and not self.org_id.strip():
+            raise ValueError("org_id is required when provided")
+        if self.user_id is not None and not self.user_id.strip():
+            raise ValueError("user_id is required when provided")
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +111,14 @@ class AnalyticsRecord:
     semantic_version_id: str
     parameters: Mapping[str, object]
     result: AnalyticsResult
+    org_id: str = "org_legacy"
+    user_id: str = "user_legacy"
+
+    def __post_init__(self) -> None:
+        if not self.org_id.strip():
+            raise ValueError("org_id is required")
+        if not self.user_id.strip():
+            raise ValueError("user_id is required")
 
 
 class AnalyticsRepository(Protocol):
@@ -176,21 +190,29 @@ class AnalyticsService:
         return self._repository.result_by_trace_id(trace_id)
 
     def _persist(self, request: AnalyticsRequest, result: AnalyticsResult) -> None:
+        parameters: dict[str, object] = {
+            "time_column": request.time_column,
+            "value_column": request.value_column,
+            "grain": request.grain.value,
+            "horizon": request.analysis_options.horizon,
+            "anomaly_z_threshold": request.analysis_options.anomaly_z_threshold,
+            "method": result.method,
+            "model_version": result.model_version,
+        }
+        if request.org_id is not None:
+            parameters["org_id"] = request.org_id
+        if request.user_id is not None:
+            parameters["user_id"] = request.user_id
+
         self._repository.save_result(
             AnalyticsRecord(
                 trace_id=request.trace_id,
                 metric_id=request.metric_id,
                 semantic_version_id=request.semantic_version_id,
-                parameters={
-                    "time_column": request.time_column,
-                    "value_column": request.value_column,
-                    "grain": request.grain.value,
-                    "horizon": request.analysis_options.horizon,
-                    "anomaly_z_threshold": request.analysis_options.anomaly_z_threshold,
-                    "method": result.method,
-                    "model_version": result.model_version,
-                },
+                parameters=parameters,
                 result=result,
+                org_id=request.org_id or "org_legacy",
+                user_id=request.user_id or "user_legacy",
             )
         )
 

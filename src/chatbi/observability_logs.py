@@ -49,13 +49,26 @@ class LogSanitizer:
 
     _email_pattern = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
     _phone_pattern = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")
+    _bearer_token_pattern = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+    _sensitive_assignment_pattern = re.compile(
+        r"\b(password|access[_-]?token|refresh[_-]?token|authorization|api[_-]?key|secret|token)"
+        r"\s*[:=]\s*([^\s,;]+)",
+        re.IGNORECASE,
+    )
     _sensitive_key_tokens = frozenset(
         {
+            "access_token",
+            "api_key",
+            "authorization",
             "customer_id",
             "customer_name",
             "email",
+            "password",
             "phone",
+            "refresh_token",
             "session_id",
+            "secret",
+            "token",
             "user_email",
             "user_id",
         }
@@ -92,7 +105,15 @@ class LogSanitizer:
         return value
 
     def _sanitize_text(self, text: str) -> str:
-        masked_email_text = self._email_pattern.sub("[masked-email]", text)
+        masked_token_text = self._bearer_token_pattern.sub(
+            "Bearer [masked-token]",
+            text,
+        )
+        masked_assignment_text = self._sensitive_assignment_pattern.sub(
+            lambda match: f"{match.group(1)}=[masked-secret]",
+            masked_token_text,
+        )
+        masked_email_text = self._email_pattern.sub("[masked-email]", masked_assignment_text)
         return self._phone_pattern.sub("[masked-phone]", masked_email_text)
 
     def _is_sensitive_key(self, key: str) -> bool:
@@ -108,6 +129,11 @@ class LogSanitizer:
             return "[masked-email]"
         if "phone" in normalized_key:
             return "[masked-phone]"
+        if any(
+            token in normalized_key
+            for token in ("password", "token", "authorization", "secret", "api_key")
+        ):
+            return "[masked-secret]"
         if "customer_name" in normalized_key:
             return "[masked-name]"
         if "session_id" in normalized_key:

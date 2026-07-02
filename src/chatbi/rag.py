@@ -86,6 +86,7 @@ class RagDocument:
     published_at: datetime
     business_tags: tuple[str, ...]
     permission_tags: tuple[str, ...]
+    org_id: str = "org_legacy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +96,7 @@ class RagChunk:
     position: int
     text: str
     token_count: int
+    org_id: str = "org_legacy"
 
     def __post_init__(self) -> None:
         _require_text(self.chunk_id, "chunk_id")
@@ -113,6 +115,7 @@ class EmbeddingMetadata:
     model_name: str
     model_version: str
     dimensions: int
+    org_id: str = "org_legacy"
 
     def __post_init__(self) -> None:
         _require_text(self.embedding_id, "embedding_id")
@@ -129,6 +132,7 @@ class IndexJob:
     document_id: str
     status: IndexJobStatus
     error_message: str | None = None
+    org_id: str = "org_legacy"
 
     @classmethod
     def queued(cls, document_id: str) -> IndexJob:
@@ -184,6 +188,7 @@ class EvidenceEvent:
     document_id: str
     chunk_id: str
     returned_at: datetime
+    org_id: str = "org_legacy"
 
     def __post_init__(self) -> None:
         _require_text(self.event_id, "event_id")

@@ -56,6 +56,7 @@ def make_artifacts() -> IndexArtifacts:
         published_at=PUBLISHED_AT,
         business_tags=("revenue", "campaign"),
         permission_tags=("sales",),
+        org_id="org_001",
     )
     chunk = RagChunk(
         chunk_id="doc_001_chunk_1",
@@ -63,6 +64,7 @@ def make_artifacts() -> IndexArtifacts:
         position=1,
         text="Revenue dropped after campaign spend paused.",
         token_count=6,
+        org_id="org_001",
     )
     metadata = EmbeddingMetadata(
         embedding_id="doc_001_chunk_1_embedding",
@@ -70,11 +72,13 @@ def make_artifacts() -> IndexArtifacts:
         model_name="mock-local-embedding",
         model_version="v1",
         dimensions=16,
+        org_id="org_001",
     )
     job = IndexJob(
         job_id="rag_job_doc_001",
         document_id="doc_001",
         status=IndexJobStatus.SUCCEEDED,
+        org_id="org_001",
     )
     return IndexArtifacts(
         document=document,
@@ -108,9 +112,13 @@ def test_postgres_rag_repository_saves_index_artifacts() -> None:
     assert "INSERT INTO rag.embedding_metadata" in executed_sql
     assert "INSERT INTO rag.index_jobs" in executed_sql
     assert fake_connection.executed[0][1][0] == "doc_001"
+    assert fake_connection.executed[0][1][-1] == "org_001"
     assert fake_connection.executed[1][1][0] == "doc_001_chunk_1"
+    assert fake_connection.executed[1][1][-1] == "org_001"
     assert fake_connection.executed[2][1][0] == "doc_001_chunk_1_embedding"
+    assert fake_connection.executed[2][1][-1] == "org_001"
     assert fake_connection.executed[3][1][0] == "rag_job_doc_001"
+    assert fake_connection.executed[3][1][-1] == "org_001"
     assert fake_connection.commit_count >= 1
 
 
@@ -125,6 +133,7 @@ def test_postgres_rag_repository_loads_document_chunk_and_job_by_id() -> None:
                 PUBLISHED_AT,
                 ("revenue", "campaign"),
                 ("sales",),
+                "org_001",
             ),
             (
                 "doc_001_chunk_1",
@@ -132,20 +141,22 @@ def test_postgres_rag_repository_loads_document_chunk_and_job_by_id() -> None:
                 1,
                 "Revenue dropped after campaign spend paused.",
                 6,
+                "org_001",
             ),
             (
                 "rag_job_doc_001",
                 "doc_001",
                 "succeeded",
                 None,
+                "org_001",
             ),
         )
     )
     repository = PostgresRagRepository(connection)
 
-    document = repository.document_by_id("doc_001")
-    chunk = repository.chunk_by_id("doc_001_chunk_1")
-    job = repository.job_by_id("rag_job_doc_001")
+    document = repository.document_by_id("doc_001", org_id="org_001")
+    chunk = repository.chunk_by_id("doc_001_chunk_1", org_id="org_001")
+    job = repository.job_by_id("rag_job_doc_001", org_id="org_001")
 
     assert document is not None
     assert document.document_id == "doc_001"
@@ -153,6 +164,9 @@ def test_postgres_rag_repository_loads_document_chunk_and_job_by_id() -> None:
     assert chunk.chunk_id == "doc_001_chunk_1"
     assert job is not None
     assert job.status is IndexJobStatus.SUCCEEDED
+    assert connection.executed[0][1] == ("doc_001", "org_001")
+    assert connection.executed[1][1] == ("doc_001_chunk_1", "org_001")
+    assert connection.executed[2][1] == ("rag_job_doc_001", "org_001")
 
 
 def test_postgres_rag_repository_lists_embedding_metadata_and_events() -> None:
@@ -173,6 +187,7 @@ def test_postgres_rag_repository_lists_embedding_metadata_and_events() -> None:
                     "mock-local-embedding",
                     "v1",
                     16,
+                    "org_001",
                 ),
             ),
             (
@@ -183,17 +198,30 @@ def test_postgres_rag_repository_lists_embedding_metadata_and_events() -> None:
                     event.document_id,
                     event.chunk_id,
                     event.returned_at,
+                    "org_001",
                 ),
             ),
         )
     )
     repository = PostgresRagRepository(connection)
 
-    metadata = repository.list_embedding_metadata()
-    events = repository.list_evidence_events_by_trace_id("trc_001")
+    metadata = repository.list_embedding_metadata(org_id="org_001")
+    events = repository.list_evidence_events_by_trace_id("trc_001", org_id="org_001")
 
     assert metadata[0].embedding_id == "doc_001_chunk_1_embedding"
-    assert events == (event,)
+    assert events == (
+        EvidenceEvent(
+            event_id=event.event_id,
+            trace_id=event.trace_id,
+            evidence_id=event.evidence_id,
+            document_id=event.document_id,
+            chunk_id=event.chunk_id,
+            returned_at=event.returned_at,
+            org_id="org_001",
+        ),
+    )
+    assert connection.executed[0][1] == ("org_001",)
+    assert connection.executed[1][1] == ("trc_001", "org_001")
 
 
 def test_postgres_rag_repository_saves_evidence_events() -> None:
@@ -204,6 +232,7 @@ def test_postgres_rag_repository_saves_evidence_events() -> None:
         document_id="doc_001",
         chunk_id="doc_001_chunk_1",
         returned_at=RETURNED_AT,
+        org_id="org_001",
     )
     connection: RagPostgresConnection = FakeRagPostgresConnection()
     repository = PostgresRagRepository(connection)
@@ -219,8 +248,22 @@ def test_postgres_rag_repository_saves_evidence_events() -> None:
         event.document_id,
         event.chunk_id,
         event.returned_at,
+        event.org_id,
     )
     assert fake_connection.commit_count == 1
+
+
+def test_postgres_rag_repository_filters_documents_and_chunks_by_tenant() -> None:
+    connection: RagPostgresConnection = FakeRagPostgresConnection(fetchall_rows=((), ()))
+    repository = PostgresRagRepository(connection)
+
+    repository.list_documents(org_id="org_001")
+    repository.list_chunks(org_id="org_001")
+
+    assert "WHERE org_id = %s" in connection.executed[0][0]
+    assert connection.executed[0][1] == ("org_001",)
+    assert "WHERE org_id = %s" in connection.executed[1][0]
+    assert connection.executed[1][1] == ("org_001",)
 
 
 def _fake(connection: RagPostgresConnection) -> FakeRagPostgresConnection:

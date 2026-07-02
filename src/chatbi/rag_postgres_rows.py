@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS rag.documents (
     ),
     published_at TIMESTAMPTZ NOT NULL,
     business_tags TEXT[] NOT NULL DEFAULT '{}',
-    permission_tags TEXT[] NOT NULL DEFAULT '{}'
+    permission_tags TEXT[] NOT NULL DEFAULT '{}',
+    org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
 
 CREATE TABLE IF NOT EXISTS rag.chunks (
@@ -48,7 +49,8 @@ CREATE TABLE IF NOT EXISTS rag.chunks (
     document_id TEXT NOT NULL REFERENCES rag.documents(document_id),
     position INTEGER NOT NULL CHECK (position > 0),
     chunk_text TEXT NOT NULL,
-    token_count INTEGER NOT NULL CHECK (token_count > 0)
+    token_count INTEGER NOT NULL CHECK (token_count > 0),
+    org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
 
 CREATE TABLE IF NOT EXISTS rag.embedding_metadata (
@@ -56,7 +58,8 @@ CREATE TABLE IF NOT EXISTS rag.embedding_metadata (
     chunk_id TEXT NOT NULL REFERENCES rag.chunks(chunk_id),
     model_name TEXT NOT NULL,
     model_version TEXT NOT NULL,
-    dimensions INTEGER NOT NULL CHECK (dimensions > 0)
+    dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+    org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
 
 CREATE TABLE IF NOT EXISTS rag.index_jobs (
@@ -65,7 +68,8 @@ CREATE TABLE IF NOT EXISTS rag.index_jobs (
     status TEXT NOT NULL CHECK (
         status IN ('queued', 'running', 'succeeded', 'failed')
     ),
-    error_message TEXT NULL
+    error_message TEXT NULL,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
 
 CREATE TABLE IF NOT EXISTS rag.evidence_events (
@@ -74,8 +78,12 @@ CREATE TABLE IF NOT EXISTS rag.evidence_events (
     evidence_id TEXT NOT NULL,
     document_id TEXT NOT NULL,
     chunk_id TEXT NOT NULL,
-    returned_at TIMESTAMPTZ NOT NULL
+    returned_at TIMESTAMPTZ NOT NULL,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
+
+CREATE INDEX IF NOT EXISTS idx_rag_documents_org_id
+    ON rag.documents(org_id);
 
 CREATE INDEX IF NOT EXISTS idx_rag_documents_published_at
     ON rag.documents(published_at DESC);
@@ -89,8 +97,17 @@ CREATE INDEX IF NOT EXISTS idx_rag_documents_permission_tags
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_document_id_position
     ON rag.chunks(document_id, position);
 
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_org_document_position
+    ON rag.chunks(org_id, document_id, position);
+
+CREATE INDEX IF NOT EXISTS idx_rag_embedding_metadata_org_id
+    ON rag.embedding_metadata(org_id);
+
 CREATE INDEX IF NOT EXISTS idx_rag_evidence_events_trace_id
     ON rag.evidence_events(trace_id);
+
+CREATE INDEX IF NOT EXISTS idx_rag_evidence_events_org_trace_id
+    ON rag.evidence_events(org_id, trace_id);
 """.strip()
 
 
@@ -103,6 +120,7 @@ def document_to_row(document: RagDocument) -> Mapping[str, object]:
         "published_at": document.published_at,
         "business_tags": document.business_tags,
         "permission_tags": document.permission_tags,
+        "org_id": document.org_id,
     }
 
 
@@ -115,6 +133,7 @@ def document_from_row(row: Mapping[str, object]) -> RagDocument:
         published_at=_datetime(row, "published_at"),
         business_tags=_tags(row, "business_tags"),
         permission_tags=_tags(row, "permission_tags"),
+        org_id=_optional_scope(row),
     )
 
 
@@ -125,6 +144,7 @@ def chunk_to_row(chunk: RagChunk) -> Mapping[str, object]:
         "position": chunk.position,
         "chunk_text": chunk.text,
         "token_count": chunk.token_count,
+        "org_id": chunk.org_id,
     }
 
 
@@ -135,6 +155,7 @@ def chunk_from_row(row: Mapping[str, object]) -> RagChunk:
         position=_integer(row, "position"),
         text=_string(row, "chunk_text"),
         token_count=_integer(row, "token_count"),
+        org_id=_optional_scope(row),
     )
 
 
@@ -145,6 +166,7 @@ def embedding_metadata_to_row(metadata: EmbeddingMetadata) -> Mapping[str, objec
         "model_name": metadata.model_name,
         "model_version": metadata.model_version,
         "dimensions": metadata.dimensions,
+        "org_id": metadata.org_id,
     }
 
 
@@ -155,6 +177,7 @@ def embedding_metadata_from_row(row: Mapping[str, object]) -> EmbeddingMetadata:
         model_name=_string(row, "model_name"),
         model_version=_string(row, "model_version"),
         dimensions=_integer(row, "dimensions"),
+        org_id=_optional_scope(row),
     )
 
 
@@ -164,6 +187,7 @@ def index_job_to_row(job: IndexJob) -> Mapping[str, object | None]:
         "document_id": job.document_id,
         "status": job.status.value,
         "error_message": job.error_message,
+        "org_id": job.org_id,
     }
 
 
@@ -173,6 +197,7 @@ def index_job_from_row(row: Mapping[str, object]) -> IndexJob:
         document_id=_string(row, "document_id"),
         status=IndexJobStatus(_string(row, "status")),
         error_message=_optional_string(row, "error_message"),
+        org_id=_optional_scope(row),
     )
 
 
@@ -184,6 +209,7 @@ def evidence_event_to_row(event: EvidenceEvent) -> Mapping[str, object]:
         "document_id": event.document_id,
         "chunk_id": event.chunk_id,
         "returned_at": event.returned_at,
+        "org_id": event.org_id,
     }
 
 
@@ -195,6 +221,7 @@ def evidence_event_from_row(row: Mapping[str, object]) -> EvidenceEvent:
         document_id=_string(row, "document_id"),
         chunk_id=_string(row, "chunk_id"),
         returned_at=_datetime(row, "returned_at"),
+        org_id=_optional_scope(row),
     )
 
 
@@ -235,3 +262,12 @@ def _tags(row: Mapping[str, object], field_name: str) -> tuple[str, ...]:
     if isinstance(value, str):
         raise ValueError(f"{field_name} must be a sequence of strings")
     return normalize_tags(tuple(cast(tuple[str, ...], tuple(cast(Any, value)))))
+
+
+def _optional_scope(row: Mapping[str, object]) -> str:
+    value = row.get("org_id")
+    if value is None:
+        return "org_legacy"
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("org_id must be a non-empty string")
+    return value

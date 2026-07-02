@@ -1149,6 +1149,8 @@ def test_v2_analytics_analyze_persists_result_and_result_endpoint_reads_it() -> 
     assert result_body["request_id"] == "req_analytics_lookup"
     assert result_body["data"]["trace_id"] == "tr_analytics_sync"
     assert result_body["data"]["parameters"]["horizon"] == 2
+    assert result_body["data"]["parameters"]["org_id"] == "org_test"
+    assert result_body["data"]["parameters"]["user_id"] == "u_001"
     assert repository.result_by_trace_id("tr_analytics_sync") is not None
 
 
@@ -1194,6 +1196,10 @@ def test_v2_analytics_task_endpoint_enqueues_analytics_task() -> None:
     assert body["data"]["payload"]["request"]["metric_id"] == "revenue"
     assert task is not None
     assert task.kind is AsyncTaskKind.ANALYTICS
+    assert task.payload["org_id"] == "org_test"
+    assert task.payload["user_id"] == "u_001"
+    assert task.payload["request"]["org_id"] == "org_test"
+    assert task.payload["request"]["user_id"] == "u_001"
 
 
 def test_v2_analytics_result_endpoint_returns_not_found() -> None:

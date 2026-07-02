@@ -13,6 +13,7 @@ from chatbi.governance.audit import (
     SQL_RULE_HITS_TABLE_SQL,
 )
 from chatbi.analytics_postgres_rows import ANALYTICS_V2_TABLES_SQL
+from chatbi.auth import AUTH_TABLES_SQL
 from chatbi.rag_postgres_rows import RAG_V2_TABLES_SQL
 
 
@@ -25,6 +26,7 @@ V2_SCHEMA_NAMES = (
     "knowledge",
     "rag",
     "analytics",
+    "auth",
 )
 
 V2_SCHEMAS_SQL = "\n".join(
@@ -52,6 +54,10 @@ RAG_V2_EMBEDDING_METADATA_TABLE = "rag.embedding_metadata"
 RAG_V2_INDEX_JOBS_TABLE = "rag.index_jobs"
 RAG_V2_EVIDENCE_EVENTS_TABLE = "rag.evidence_events"
 ANALYTICS_V2_RESULTS_TABLE = "analytics.results"
+AUTH_ORGANIZATIONS_TABLE = "auth.organizations"
+AUTH_USERS_TABLE = "auth.users"
+AUTH_REFRESH_SESSIONS_TABLE = "auth.refresh_sessions"
+AUTH_ROLE_AUDIT_EVENTS_TABLE = "auth.role_audit_events"
 GOVERNANCE_ACCESS_POLICIES_TABLE = "governance.access_policies"
 EVALUATION_CASES_TABLE = "evaluation.eval_cases"
 EVALUATION_RUNS_TABLE = "evaluation.eval_runs"
@@ -76,10 +82,13 @@ CREATE TABLE IF NOT EXISTS runtime.sessions (
     user_id TEXT NOT NULL,
     title TEXT,
     created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
+    updated_at TIMESTAMPTZ NOT NULL,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
 CREATE INDEX IF NOT EXISTS idx_runtime_sessions_user_created_at
     ON runtime.sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runtime_sessions_org_user_created_at
+    ON runtime.sessions(org_id, user_id, created_at DESC);
 """
 
 RUNTIME_MESSAGES_TABLE_SQL = """
@@ -90,12 +99,15 @@ CREATE TABLE IF NOT EXISTS runtime.messages (
     trace_id TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL
+    created_at TIMESTAMPTZ NOT NULL,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
 CREATE INDEX IF NOT EXISTS idx_runtime_messages_session_created_at
     ON runtime.messages(session_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_runtime_messages_trace_id
     ON runtime.messages(trace_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_messages_org_trace_id
+    ON runtime.messages(org_id, trace_id);
 """
 
 RUNTIME_QUERY_HISTORY_TABLE_SQL = """
@@ -446,6 +458,7 @@ EVALUATION_TABLES_SQL = """
 CREATE SCHEMA IF NOT EXISTS evaluation;
 CREATE TABLE IF NOT EXISTS evaluation.eval_cases (
     eval_case_id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy',
     question TEXT NOT NULL,
     expected_metric_id TEXT NOT NULL,
     expected_sql_pattern TEXT NOT NULL,
@@ -455,6 +468,7 @@ CREATE TABLE IF NOT EXISTS evaluation.eval_cases (
 );
 CREATE TABLE IF NOT EXISTS evaluation.eval_runs (
     eval_run_id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy',
     eval_suite_id TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed', 'degraded')),
     started_at TIMESTAMPTZ NOT NULL,
@@ -463,6 +477,7 @@ CREATE TABLE IF NOT EXISTS evaluation.eval_runs (
 );
 CREATE TABLE IF NOT EXISTS evaluation.eval_scores (
     eval_score_id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'org_legacy',
     eval_run_id TEXT NOT NULL REFERENCES evaluation.eval_runs(eval_run_id),
     eval_case_id TEXT NOT NULL REFERENCES evaluation.eval_cases(eval_case_id),
     trace_id TEXT NOT NULL,
@@ -474,12 +489,18 @@ CREATE TABLE IF NOT EXISTS evaluation.eval_scores (
 );
 CREATE INDEX IF NOT EXISTS idx_evaluation_eval_cases_metric_tags
     ON evaluation.eval_cases(expected_metric_id);
+CREATE INDEX IF NOT EXISTS idx_evaluation_eval_cases_org_metric
+    ON evaluation.eval_cases(org_id, expected_metric_id);
 CREATE INDEX IF NOT EXISTS idx_evaluation_eval_runs_suite_started_at
     ON evaluation.eval_runs(eval_suite_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_evaluation_eval_runs_org_suite_started_at
+    ON evaluation.eval_runs(org_id, eval_suite_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_evaluation_eval_scores_run_case
     ON evaluation.eval_scores(eval_run_id, eval_case_id);
 CREATE INDEX IF NOT EXISTS idx_evaluation_eval_scores_trace_id
     ON evaluation.eval_scores(trace_id);
+CREATE INDEX IF NOT EXISTS idx_evaluation_eval_scores_org_trace_id
+    ON evaluation.eval_scores(org_id, trace_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluation_eval_scores_run_case_metric
     ON evaluation.eval_scores(eval_run_id, eval_case_id, metric_name);
 """
@@ -763,6 +784,7 @@ BASE_MIGRATION_SQL_STATEMENTS = (
     KNOWLEDGE_RAG_SEED_SQL,
     RAG_V2_TABLES_SQL,
     ANALYTICS_V2_TABLES_SQL,
+    AUTH_TABLES_SQL,
     GOVERNANCE_POLICY_TABLES_SQL,
     GOVERNANCE_RESTRICTED_FIELD_POLICY_SEED_SQL,
     EVALUATION_TABLES_SQL,

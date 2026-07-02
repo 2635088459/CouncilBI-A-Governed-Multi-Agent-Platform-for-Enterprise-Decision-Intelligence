@@ -67,6 +67,7 @@ def make_record(trace_id: str = "tr_12345678") -> RequestMetadataRecord:
         role=UserRole.BUSINESS_USER,
         locale=Locale.EN,
         question="Show revenue trend.",
+        org_id="org_001",
     )
 
 
@@ -174,6 +175,7 @@ def test_postgres_request_metadata_store_saves_accepted_request() -> None:
         "Show revenue trend.",
         "accepted",
     )
+    assert params[-1] == "org_001"
     assert fake_connection.commits == 1
 
 
