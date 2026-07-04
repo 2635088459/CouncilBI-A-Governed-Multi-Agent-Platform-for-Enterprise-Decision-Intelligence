@@ -71,6 +71,10 @@ Recommended flow:
 7. Run smoke tests.
 8. Manually approve production deploy.
 
+The final implementation must build a real browser frontend image from the
+React + Vite project, not an inline placeholder page. Local Compose should build
+the frontend, backend, and worker images before manual smoke testing.
+
 ## 6. Release Strategy
 
 Use rolling updates by default. Use canaries for model and prompt changes. Roll back when release gates or critical metrics fail.
@@ -98,7 +102,7 @@ This can later become a Helm chart.
 
 ## 8. Implementation Order
 
-1. Stabilize Dockerfile and Compose.
+1. Stabilize Dockerfile and Compose, including a React + Vite frontend image.
 2. Add Kubernetes base manifests.
 3. Add Postgres/Redis secrets.
 4. Test locally with kind or minikube.
@@ -106,3 +110,12 @@ This can later become a Helm chart.
 6. Add ingress and TLS.
 7. Add HPA and resource limits.
 8. Add CI/CD deployment.
+
+## 9. Current Verification Addendum
+
+The repository now includes `frontend/` as the browser runtime, `Dockerfile.frontend`
+as a Node/Vite build that serves compiled assets with nginx, and `docker-compose.yml`
+as the local full-stack image build path. The frontend nginx config proxies
+`/api`, `/healthz`, `/readyz`, and `/metrics` to the backend service so manual
+browser tests use same-origin requests. Compose smoke testing should verify
+`http://localhost:8080` for the UI and `http://localhost:8000/healthz` for the API.

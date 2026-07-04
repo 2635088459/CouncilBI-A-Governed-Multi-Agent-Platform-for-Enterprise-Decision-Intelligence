@@ -56,6 +56,38 @@ Out of scope:
 | TC-FV07-006 | config | Verify staging can connect to configured PostgreSQL and Redis. |
 | TC-FV07-007 | release | Rollback procedure is documented and smoke-tested at least once. |
 
+Implemented test coverage:
+- `tests/test_cloud_deployment_workflow.py`
+- `tests/test_cloud_deployment_runbook.py`
+- `tests/test_cloud_secret_scan.py`
+- `tests/test_dockerfiles.py`
+- `tests/test_docker_compose_architecture.py`
+- `tests/test_k8s_runtime_architecture.py`
+
+Implemented deployment artifacts:
+- `.github/workflows/fv07-cloud-deployment.yml`
+- `docs/deployment/cloud-kubernetes-runbook.md`
+- `verification/11-cloud-kubernetes-deployment-verification.md`
+- `Dockerfile.backend`
+- `Dockerfile.worker`
+- `Dockerfile.frontend`
+- `.dockerignore`
+- `docker-compose.yml`
+- `docker/postgres/init/01-readonly-role.sh`
+- `k8s/chatbi-runtime.yaml`
+
+Implemented evidence:
+- `FR-FV07-001`: Backend, worker, and frontend Dockerfiles build from repository source; the frontend image builds static assets with `chatbi-build-frontend` and serves them with nginx.
+- `FR-FV07-002`: The manifest defines backend, frontend, worker, Redis, PostgreSQL, services, config maps, secret references, and ingress routes.
+- `FR-FV07-003`: Backend exposes `/healthz` liveness and `/readyz` readiness probes; Redis and PostgreSQL expose dependency readiness probes.
+- `FR-FV07-004` / `NFR-FV07-002`: Database credentials are referenced through `secretKeyRef` (`chatbi-runtime-secrets`) or required environment placeholders. `tests/test_cloud_secret_scan.py` rejects committed provider keys, database passwords, plaintext database URLs, and token fragments across deployment artifacts.
+- `FR-FV07-005` / `NFR-FV07-004`: Deployments define resource requests/limits and the backend API has a `HorizontalPodAutoscaler`.
+- `FR-FV07-006`: `chatbi-managed-service-config` and `chatbi-runtime-secrets` support managed PostgreSQL and Redis staging endpoints without committing credentials.
+- `FR-FV07-007`: `.github/workflows/fv07-cloud-deployment.yml` runs type checks, deployment tests, Docker image builds, release-gate tests, optional staging deployment, and smoke tests.
+- `FR-FV07-008`: The staging workflow and runbook document `kubectl rollout undo` commands for backend, frontend, and worker.
+- `NFR-FV07-001`: Staging smoke commands call `/healthz` and `/readyz`; local P99 coverage is provided by `tests/test_runtime_latency_smoke.py`.
+- `NFR-FV07-003`: `docs/deployment/cloud-kubernetes-runbook.md` documents reproducible build, secret creation, deploy, smoke, and rollback commands.
+
 ## 7. Traceability Matrix
 | Requirement | Acceptance Criteria | Test Case |
 |---|---|---|
@@ -67,4 +99,3 @@ Out of scope:
 | FR-FV07-006 | AC-FV07-003 | TC-FV07-006 |
 | FR-FV07-007 | AC-FV07-001 | TC-FV07-001, TC-FV07-005 |
 | FR-FV07-008 | AC-FV07-005 | TC-FV07-007 |
-

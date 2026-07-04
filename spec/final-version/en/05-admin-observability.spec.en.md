@@ -27,6 +27,7 @@ Out of scope:
 | FR-FV05-005 | Admin dashboard APIs MUST expose system health, LLM health, SQL safety, RAG health, evals, release gate, and audit events. |
 | FR-FV05-006 | Release gate failure MUST be visible to admins and block final release workflow. |
 | FR-FV05-007 | Normal users MUST never see global traces, evals, release gates, or audit events. |
+| FR-FV05-008 | Chat query responses SHOULD include a request-scoped agent timeline showing planned, succeeded, failed, skipped, and not-planned agent steps without exposing global observability data. |
 
 ## 4. Non-Functional Requirements
 | ID | Requirement |
@@ -56,6 +57,17 @@ Out of scope:
 - `timestamp: datetime`
 - `metadata: dict`
 
+### 5.3 Admin Dashboard Summary API
+- `GET /api/v2/admin/observability/summary`
+- Requires `admin:trace:read`, `admin:eval:read`, `admin:release_gate:read`, and `admin:audit:read`.
+- Returns the `AdminDashboardSummary` contract in a v2 envelope.
+- Successful reads MUST append an API audit record for `/api/v2/admin/observability/summary`.
+- `release_gate` MUST include `release_gate_passed`, `blocking`, `blocking_reason`, `failed_cases`, and `eval_report_path`.
+
+### 5.4 Release Workflow Guard
+- Release gate reports MUST convert to a workflow exit code where pass returns `0` and fail returns non-zero.
+- Failed release gate reports MUST expose a blocking reason for CI logs and admin dashboards.
+
 ## 6. Acceptance Criteria
 | ID | Criterion |
 |---|---|
@@ -64,6 +76,7 @@ Out of scope:
 | AC-FV05-003 | Admin reads of sensitive observability endpoints create audit events. |
 | AC-FV05-004 | Logs and traces include user/org context without leaking secrets. |
 | AC-FV05-005 | Failed release gate blocks release workflow. |
+| AC-FV05-006 | A normal chat response exposes the current request's agent timeline, including SQL, RAG, analytics, visualization, verifier, and answer synthesis status. |
 
 ## 7. Test Plan
 | ID | Layer | Description |
@@ -75,6 +88,24 @@ Out of scope:
 | TC-FV05-005 | release | Failed release gate stops release command or CI job. |
 | TC-FV05-006 | tenant | Tenant admin cannot read another tenant's observability data. |
 | TC-FV05-007 | benchmark | Dashboard summary P95 over 10k mock events. |
+| TC-FV05-008 | integration | Chat query response includes a request-scoped agent timeline and marks non-participating agents as `not_planned`. |
+
+Implemented test coverage:
+- `tests/test_auth_rbac_tenant_isolation.py`
+  - Admin dashboard summary success, normal-user 403, admin-read audit.
+  - Tenant-scoped admin summary isolation.
+  - Dashboard summary P95 over 10k mock request events.
+  - Failed release gate blocker is visible in admin dashboard summary.
+- `tests/test_release_gate.py`
+  - Failed release gate maps to non-zero workflow exit code and blocking reason.
+
+Implemented source modules:
+- `src/chatbi/api/http.py`
+- `src/chatbi/application/app.py`
+- `src/chatbi/release_gate.py`
+
+Implemented local API:
+- `GET /api/v2/admin/observability/summary`
 
 ## 8. Traceability Matrix
 | Requirement | Acceptance Criteria | Test Case |
@@ -86,4 +117,4 @@ Out of scope:
 | FR-FV05-005 | AC-FV05-001 | TC-FV05-001 |
 | FR-FV05-006 | AC-FV05-005 | TC-FV05-005 |
 | FR-FV05-007 | AC-FV05-002 | TC-FV05-002 |
-
+| FR-FV05-008 | AC-FV05-006 | TC-FV05-008 |

@@ -1,58 +1,40 @@
 services:
   frontend:
-    image: nginx:1.27-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: governed-chatbi-frontend:local
     ports:
       - "8080:80"
     depends_on:
       backend:
         condition: service_started
-    environment:
-      API_BASE_URL: http://backend:8000
-      BACKEND_API_URL: http://backend:8000
-      FRONTEND_ENVIRONMENT: dev
-      FRONTEND_LOCALE_DEFAULT: en
-    command:
-      - /bin/sh
-      - -c
-      - |
-        cat >/usr/share/nginx/html/index.html <<'HTML'
-        <!doctype html>
-        <html lang="en">
-          <head><meta charset="utf-8"><title>Governed ChatBI</title></head>
-          <body>
-            <main>
-              <h1>Governed ChatBI</h1>
-              <p>Backend API: http://localhost:8000</p>
-            </main>
-          </body>
-        </html>
-        HTML
-        nginx -g 'daemon off;'
 
   backend:
-    image: python:3.12-slim
-    working_dir: /app
-    volumes:
-      - .:/app
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: governed-chatbi-backend:local
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://chatbi:chatbi_password@postgres:5432/chatbi
-      CHATBI_READONLY_DATABASE_URL: postgresql://chatbi_readonly:chatbi_readonly_password@postgres:5432/chatbi
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      CHATBI_READONLY_DATABASE_URL: ${CHATBI_READONLY_DATABASE_URL:?CHATBI_READONLY_DATABASE_URL is required}
       REDIS_URL: redis://redis:6379/0
       VECTOR_STORE_URL: memory://local-vector-store
       CHATBI_USE_POSTGRES_METADATA: "1"
+      CHATBI_LLM_PROVIDER: ${CHATBI_LLM_PROVIDER:-mock}
+      CHATBI_LLM_MODEL: ${CHATBI_LLM_MODEL:-}
+      CHATBI_LLM_TIMEOUT_MS: ${CHATBI_LLM_TIMEOUT_MS:-1000}
+      CHATBI_LLM_MAX_RETRIES: ${CHATBI_LLM_MAX_RETRIES:-1}
+      CHATBI_LLM_BACKOFF_MS: ${CHATBI_LLM_BACKOFF_MS:-25}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command:
-      - /bin/sh
-      - -c
-      - |
-        pip install -e .
-        uvicorn chatbi.api.http:app --host 0.0.0.0 --port 8000
     healthcheck:
       test:
         - CMD
@@ -66,34 +48,36 @@ services:
       retries: 5
 
   worker:
-    image: python:3.12-slim
-    working_dir: /app
-    volumes:
-      - .:/app
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: governed-chatbi-worker:local
     environment:
-      DATABASE_URL: postgresql://chatbi:chatbi_password@postgres:5432/chatbi
-      CHATBI_READONLY_DATABASE_URL: postgresql://chatbi_readonly:chatbi_readonly_password@postgres:5432/chatbi
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      CHATBI_READONLY_DATABASE_URL: ${CHATBI_READONLY_DATABASE_URL:?CHATBI_READONLY_DATABASE_URL is required}
       REDIS_URL: redis://redis:6379/0
       VECTOR_STORE_URL: memory://local-vector-store
       CHATBI_USE_POSTGRES_METADATA: "1"
+      CHATBI_LLM_PROVIDER: ${CHATBI_LLM_PROVIDER:-mock}
+      CHATBI_LLM_MODEL: ${CHATBI_LLM_MODEL:-}
+      CHATBI_LLM_TIMEOUT_MS: ${CHATBI_LLM_TIMEOUT_MS:-1000}
+      CHATBI_LLM_MAX_RETRIES: ${CHATBI_LLM_MAX_RETRIES:-1}
+      CHATBI_LLM_BACKOFF_MS: ${CHATBI_LLM_BACKOFF_MS:-25}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command:
-      - /bin/sh
-      - -c
-      - |
-        pip install -e .
-        python -c "import time; print('chatbi worker ready', flush=True); time.sleep(10**9)"
 
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: chatbi
       POSTGRES_USER: chatbi
-      POSTGRES_PASSWORD: chatbi_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      CHATBI_READONLY_PASSWORD: ${CHATBI_READONLY_PASSWORD:?CHATBI_READONLY_PASSWORD is required}
     ports:
       - "5432:5432"
     volumes:

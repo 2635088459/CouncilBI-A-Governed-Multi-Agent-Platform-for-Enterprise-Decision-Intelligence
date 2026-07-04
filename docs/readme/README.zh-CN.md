@@ -252,7 +252,7 @@ docker compose up --build
 
 本地服务：
 
-- frontend placeholder: `http://localhost:8080`
+- React 前端：`http://localhost:8080`
 - backend API: `http://localhost:8000`
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`

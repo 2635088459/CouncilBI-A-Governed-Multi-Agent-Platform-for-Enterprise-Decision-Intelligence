@@ -4,28 +4,27 @@ metadata:
   name: chatbi
 ---
 apiVersion: v1
-kind: Secret
-metadata:
-  name: chatbi-postgres-secret
-  namespace: chatbi
-type: Opaque
-stringData:
-  POSTGRES_PASSWORD: chatbi_password
----
-apiVersion: v1
 kind: ConfigMap
 metadata:
   name: chatbi-runtime-config
   namespace: chatbi
 data:
-  DATABASE_URL: postgresql://chatbi:chatbi_password@postgres:5432/chatbi
-  REDIS_URL: redis://redis:6379/0
   VECTOR_STORE_URL: memory://local-vector-store
   CHATBI_USE_POSTGRES_METADATA: "1"
   API_BASE_URL: http://backend:8000
   FRONTEND_ENVIRONMENT: prod
   FRONTEND_LOCALE_DEFAULT: en
   BACKEND_API_URL: http://backend:8000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chatbi-managed-service-config
+  namespace: chatbi
+data:
+  REDIS_URL: redis://redis:6379/0
+  POSTGRES_DB: chatbi
+  POSTGRES_USER: chatbi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -53,13 +52,13 @@ spec:
           env:
             - name: DATABASE_URL
               valueFrom:
-                configMapKeyRef:
-                  name: chatbi-runtime-config
+                secretKeyRef:
+                  name: chatbi-runtime-secrets
                   key: DATABASE_URL
             - name: REDIS_URL
               valueFrom:
                 configMapKeyRef:
-                  name: chatbi-runtime-config
+                  name: chatbi-managed-service-config
                   key: REDIS_URL
             - name: VECTOR_STORE_URL
               valueFrom:
@@ -71,6 +70,13 @@ spec:
                 configMapKeyRef:
                   name: chatbi-runtime-config
                   key: CHATBI_USE_POSTGRES_METADATA
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
           readinessProbe:
             httpGet:
               path: /readyz
@@ -83,6 +89,26 @@ spec:
               port: 8000
             periodSeconds: 10
             timeoutSeconds: 3
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+  namespace: chatbi
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
 ---
 apiVersion: v1
 kind: Service
@@ -141,6 +167,13 @@ spec:
                 configMapKeyRef:
                   name: chatbi-runtime-config
                   key: BACKEND_API_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -207,13 +240,13 @@ spec:
           env:
             - name: DATABASE_URL
               valueFrom:
-                configMapKeyRef:
-                  name: chatbi-runtime-config
+                secretKeyRef:
+                  name: chatbi-runtime-secrets
                   key: DATABASE_URL
             - name: REDIS_URL
               valueFrom:
                 configMapKeyRef:
-                  name: chatbi-runtime-config
+                  name: chatbi-managed-service-config
                   key: REDIS_URL
             - name: VECTOR_STORE_URL
               valueFrom:
@@ -225,6 +258,13 @@ spec:
                 configMapKeyRef:
                   name: chatbi-runtime-config
                   key: CHATBI_USE_POSTGRES_METADATA
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -248,6 +288,13 @@ spec:
           image: redis:7-alpine
           ports:
             - containerPort: 6379
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
           readinessProbe:
             exec:
               command:
@@ -291,14 +338,27 @@ spec:
             - containerPort: 5432
           env:
             - name: POSTGRES_DB
-              value: chatbi
+              valueFrom:
+                configMapKeyRef:
+                  name: chatbi-managed-service-config
+                  key: POSTGRES_DB
             - name: POSTGRES_USER
-              value: chatbi
+              valueFrom:
+                configMapKeyRef:
+                  name: chatbi-managed-service-config
+                  key: POSTGRES_USER
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: chatbi-postgres-secret
+                  name: chatbi-runtime-secrets
                   key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
           readinessProbe:
             exec:
               command:

@@ -25,9 +25,12 @@ from chatbi.auth import (
     utc_now,
 )
 from chatbi.api.http import _build_default_auth_service, create_app
+from chatbi.application.app import ChatBIApplication
+from chatbi.core.contracts import Locale, UserRole
 from chatbi.core.runtime_config import RuntimeConfig
+from chatbi.evaluation_repository import EvalRunRecord, EvalRunStatus, InMemoryEvaluationRepository
 from chatbi.governance import InMemoryGuardrailAuditLogV2
-from chatbi.history.request_metadata import InMemoryRequestMetadataStore
+from chatbi.history.request_metadata import InMemoryRequestMetadataStore, RequestMetadataRecord
 from chatbi.history.query_results import InMemoryRuntimeQueryResultStore
 from chatbi.orchestration.worker import InMemoryWorkerHandoffQueue
 
@@ -849,6 +852,10 @@ def test_business_user_receives_403_from_admin_eval_release_and_document_endpoin
         json={"eval_suite_id": "backend_api_smoke", "questions": ["Show revenue trend."]},
     )
     release_response = client.get("/api/v2/release-gates/latest", headers=headers)
+    admin_summary_response = client.get(
+        "/api/v2/admin/observability/summary",
+        headers=headers,
+    )
     document_response = client.post(
         "/api/v2/documents/index",
         headers=headers,
@@ -857,10 +864,200 @@ def test_business_user_receives_403_from_admin_eval_release_and_document_endpoin
 
     assert eval_response.status_code == 403
     assert release_response.status_code == 403
+    assert admin_summary_response.status_code == 403
     assert document_response.status_code == 403
     assert eval_response.json()["error"]["code"] == "AUTH_FORBIDDEN"
     assert release_response.json()["error"]["code"] == "AUTH_FORBIDDEN"
+    assert admin_summary_response.json()["error"]["code"] == "AUTH_FORBIDDEN"
     assert document_response.json()["error"]["code"] == "AUTH_FORBIDDEN"
+
+
+def test_admin_observability_summary_returns_contract_and_audits_admin_read() -> None:
+    service = auth_service()
+    application = ChatBIApplication()
+    client = TestClient(create_app(application=application, auth_service=service))
+    admin_data, admin_token = promote_signup_to_admin(
+        service,
+        client,
+        "admin-observability-summary@example.com",
+    )
+    headers = bearer(admin_token)
+    client.post(
+        "/api/v2/evals/run",
+        headers=headers,
+        json={
+            "eval_suite_id": "backend_api_smoke",
+            "questions": ["Show revenue trend."],
+            "locale": "en",
+            "role": "analyst",
+        },
+    )
+
+    response = client.get("/api/v2/admin/observability/summary", headers=headers)
+
+    body = response.json()
+    data = body["data"]
+    assert response.status_code == 200
+    assert set(data) == {
+        "system_health",
+        "llm_health",
+        "sql_safety",
+        "rag_health",
+        "eval_summary",
+        "release_gate",
+        "audit_summary",
+    }
+    assert data["system_health"]["service"] == "chatbi-api"
+    assert data["llm_health"]["provider"] == "mock"
+    assert data["rag_health"]["embedding_provider"] == "mock"
+    assert data["eval_summary"]["eval_suite_id"] == "backend_api_smoke"
+    assert data["release_gate"]["release_gate_passed"] is True
+    assert data["audit_summary"]["admin_observability_read_count"] == 1
+    assert any(
+        record.endpoint == "/api/v2/admin/observability/summary"
+        and record.user_id == admin_data["user"]["user_id"]
+        for record in application.audit_records
+    )
+
+
+def test_admin_observability_summary_is_tenant_scoped() -> None:
+    service = auth_service()
+    client = TestClient(create_app(auth_service=service))
+    tenant_a, admin_a_token = promote_signup_to_admin(
+        service,
+        client,
+        "admin-observability-tenant-a@example.com",
+    )
+    _tenant_b, admin_b_token = promote_signup_to_admin(
+        service,
+        client,
+        "admin-observability-tenant-b@example.com",
+    )
+    client.post(
+        "/api/v2/chat/query",
+        headers=bearer(admin_a_token),
+        json={
+            "request_id": "req_admin_obs_tenant_a",
+            "session_id": "ses_admin_obs_tenant_a",
+            "user_id": tenant_a["user"]["user_id"],
+            "role": "admin",
+            "locale": "en",
+            "question": "Show revenue trend.",
+        },
+    )
+    client.post(
+        "/api/v2/evals/run",
+        headers=bearer(admin_a_token),
+        json={
+            "eval_suite_id": "tenant_a_eval",
+            "questions": ["Show revenue trend."],
+            "locale": "en",
+            "role": "analyst",
+        },
+    )
+
+    response = client.get(
+        "/api/v2/admin/observability/summary",
+        headers=bearer(admin_b_token),
+    )
+
+    data = response.json()["data"]
+    assert response.status_code == 200
+    assert data["system_health"]["request_count"] == 0
+    assert data["eval_summary"]["status"] == "not_run"
+    assert data["eval_summary"]["latest_eval_run_id"] is None
+    assert data["audit_summary"]["admin_observability_read_count"] == 1
+    assert "tenant_a_eval" not in response.text
+    assert tenant_a["user"]["user_id"] not in response.text
+
+
+def test_admin_observability_summary_surfaces_failed_release_gate_blocker() -> None:
+    service = auth_service()
+    evaluation_repository = InMemoryEvaluationRepository()
+    client = TestClient(
+        create_app(
+            auth_service=service,
+            application=ChatBIApplication(evaluation_repository=evaluation_repository),
+        )
+    )
+    admin_data, admin_token = promote_signup_to_admin(
+        service,
+        client,
+        "admin-observability-release-block@example.com",
+    )
+    headers = bearer(admin_token)
+    evaluation_repository.save_run(
+        EvalRunRecord(
+            eval_run_id="eval_release_blocked",
+            eval_suite_id="release_blocking_eval",
+            status=EvalRunStatus.SUCCEEDED,
+            started_at=utc_now(),
+            finished_at=utc_now(),
+            total_cases=1,
+            passed_cases=0,
+            failed_cases=1,
+            sql_safety_score=1.0,
+            release_gate_passed=False,
+            org_id=admin_data["user"]["org_id"],
+        )
+    )
+
+    response = client.get("/api/v2/admin/observability/summary", headers=headers)
+
+    release_gate = response.json()["data"]["release_gate"]
+    assert response.status_code == 200
+    assert release_gate["release_gate_passed"] is False
+    assert release_gate["blocking"] is True
+    assert release_gate["failed_cases"] == 1
+    assert release_gate["blocking_reason"] == (
+        "Release blocked because latest eval run failed 1 case(s)."
+    )
+    assert release_gate["eval_report_path"] == "/api/v2/evals/eval_release_blocked"
+
+
+def test_admin_observability_summary_p95_under_budget_with_ten_thousand_mock_events() -> None:
+    service = auth_service()
+    request_metadata_store = InMemoryRequestMetadataStore()
+    client = TestClient(
+        create_app(
+            auth_service=service,
+            request_metadata_store=request_metadata_store,
+        )
+    )
+    admin_data, admin_token = promote_signup_to_admin(
+        service,
+        client,
+        "admin-observability-benchmark@example.com",
+    )
+    org_id = admin_data["user"]["org_id"]
+    for index in range(10_000):
+        request_metadata_store.save_accepted(
+            RequestMetadataRecord(
+                trace_id=f"tr_admin_obs_benchmark_{index:05d}",
+                request_id=f"req_admin_obs_benchmark_{index:05d}",
+                session_id="ses_admin_obs_benchmark",
+                user_id=admin_data["user"]["user_id"],
+                role=UserRole.ADMIN,
+                locale=Locale.EN,
+                question="Show revenue trend.",
+                org_id=org_id,
+            )
+        )
+
+    latencies_ms: list[float] = []
+    for _ in range(20):
+        started_at = perf_counter()
+        response = client.get(
+            "/api/v2/admin/observability/summary",
+            headers=bearer(admin_token),
+        )
+        latencies_ms.append((perf_counter() - started_at) * 1000)
+        assert response.status_code == 200
+        assert response.json()["data"]["system_health"]["request_count"] == 10_000
+
+    ordered = sorted(latencies_ms)
+    p95_ms = ordered[int((len(ordered) - 1) * 0.95)]
+    assert p95_ms <= 500.0
 
 
 def test_admin_can_run_eval_read_report_and_latest_release_gate() -> None:

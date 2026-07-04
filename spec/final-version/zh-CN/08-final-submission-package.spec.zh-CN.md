@@ -28,6 +28,7 @@
 | FR-FV08-007 | verification report 必须包含 pyright、pytest、eval gate、security checks、smoke tests。 |
 | FR-FV08-008 | demo script 必须覆盖 user flow 和 admin flow。 |
 | FR-FV08-009 | final risk register 必须记录已知缺口和下一步。 |
+| FR-FV08-010 | React/Vite demo UI 必须把返回的 `chart_spec` 和 table rows 渲染成真实图表，而不只是 raw JSON 或表格。 |
 
 ## 4. 非功能需求
 | ID | 需求 |
@@ -45,6 +46,7 @@
 | AC-FV08-003 | demo script 证明 sign-in、chat query、RAG citation、admin observability、release gate。 |
 | AC-FV08-004 | risks 和 not-yet-production items 明确写出，不能隐藏。 |
 | AC-FV08-005 | 英文和中文 final-version docs 都存在。 |
+| AC-FV08-006 | 当 API 对 `Plot monthly revenue for 2012` 返回 `chart_spec` 时，本地 React UI 会显示图表。 |
 
 ## 6. 测试计划
 | ID | 层级 | 描述 |
@@ -56,6 +58,33 @@
 | TC-FV08-005 | smoke | 运行 local 或 staging smoke test。 |
 | TC-FV08-006 | human acceptance | 按 demo script 执行并记录 pass/fail notes。 |
 | TC-FV08-007 | docs parity | 验证中英文 final-version doc sets 包含匹配编号文件。 |
+| TC-FV08-008 | frontend | React/Vite source 通过可见 SVG chart component 渲染 `chart_spec`。 |
+
+已实现测试覆盖：
+- `tests/test_final_submission_package.py`
+
+已实现提交产物：
+- `README.md`
+- `docs/api.md`
+- `docs/local-startup.md`
+- `docs/deployment/cloud-kubernetes-runbook.md`
+- `docs/demo-script.md`
+- `docs/risk-register.md`
+- `verification/12-final-submission-package-verification.md`
+- `spec/final-version/en/README.en.md`
+- `spec/final-version/zh-CN/README.zh-CN.md`
+- `system_design/final-version/en/README.en.md`
+- `system_design/final-version/zh-CN/README.zh-CN.md`
+
+已实现证据：
+- `FR-FV08-001` 到 `FR-FV08-003`：root README 链接中英文 README、final-version specs 和 final-version system design indexes。
+- `FR-FV08-004`：`docs/api.md` 覆盖 auth、chat、RAG/documents、admin、eval 和 observability endpoints。
+- `FR-FV08-005`：`docs/local-startup.md` 描述 services、env vars、seed、tests 和 demo flow。
+- `FR-FV08-006`：`docs/deployment/cloud-kubernetes-runbook.md` 描述 image build、secrets、Kubernetes deployment、smoke tests 和 rollback。
+- `FR-FV08-007`：`verification/12-final-submission-package-verification.md` 列出 pyright、pytest、eval gate、security scan、smoke tests 和 baseline mock LLM policy。
+- `FR-FV08-008`：`docs/demo-script.md` 覆盖 sign-in、chat query、RAG citation、admin observability 和 release gate。
+- `FR-FV08-009`：`docs/risk-register.md` 记录已知缺口和下一步。
+- `NFR-FV08-001`：`tests/test_final_submission_package.py` 验证 final Markdown links 为 relative links，并且能解析到存在的本地文件或目录。
 
 ## 7. 追踪矩阵
 | 需求 | 验收标准 | 测试 |
@@ -69,4 +98,4 @@
 | FR-FV08-007 | AC-FV08-002 | TC-FV08-002, TC-FV08-003, TC-FV08-004 |
 | FR-FV08-008 | AC-FV08-003 | TC-FV08-006 |
 | FR-FV08-009 | AC-FV08-004 | TC-FV08-001 |
-
+| FR-FV08-010 | AC-FV08-006 | TC-FV08-008 |

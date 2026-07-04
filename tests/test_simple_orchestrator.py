@@ -18,6 +18,7 @@ from chatbi.core.contracts import (
 )
 from chatbi.governance import ReadOnlyQueryResult, ReadOnlyQueryStatus
 from chatbi.knowledge import DocumentChunk, InMemoryKnowledgeStore, KnowledgeDocument
+from chatbi.llm import LLMRequest, LLMResponse
 from chatbi.orchestration.answer_verification import AnswerAssemblyVerifier
 from chatbi.orchestration.executor import AgentRunner, AgentRunResult, PlanExecutionResult, PlanExecutor
 from chatbi.orchestration.routing import ExecutionPlan
@@ -68,6 +69,26 @@ class MissingSqlAnswerVerifier(AnswerAssemblyVerifier):
         return super().verify(replace(answer, sql_text=""))
 
 
+class RecordingLLMClient:
+    def __init__(self, response_text: str = "Synthesized from governed context.") -> None:
+        self.response_text = response_text
+        self.requests: list[LLMRequest] = []
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        return LLMResponse(
+            text=self.response_text,
+            model_name="fake-model",
+            provider="fake",
+            prompt_tokens=10,
+            completion_tokens=4,
+            total_tokens=14,
+            estimated_cost=0.0,
+            latency_ms=1,
+            finish_reason="stop",
+        )
+
+
 def make_request(
     question: str = "Show revenue trend.",
     role: UserRole = UserRole.BUSINESS_USER,
@@ -106,6 +127,136 @@ def test_orchestrator_writes_guardrail_audit_for_allowed_sql() -> None:
     assert audit_record.original_sql == "SELECT month, revenue FROM revenue_by_month LIMIT 100"
     assert audit_record.safe_sql is not None
     assert audit_record.safe_sql.startswith("SELECT ")
+
+
+def test_orchestrator_answers_2012_highest_revenue_with_data_provenance() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(make_request("Which month had the highest revenue in 2012?"))
+
+    assert answer.sql_text == (
+        "SELECT month, revenue FROM revenue_by_month "
+        "WHERE month LIKE '2012-%' ORDER BY revenue DESC LIMIT 100"
+    )
+    assert answer.answer_text == "Highest revenue month was 2012-12 with revenue 1625.0."
+    assert answer.table_result.rows[0] == {"month": "2012-01", "revenue": 940.0}
+    assert answer.table_result.rows[-1] == {"month": "2012-12", "revenue": 1625.0}
+    assert len(answer.evidence_list) == 1
+    assert answer.evidence_list[0].source_id == "dataset_revenue_monthly_2012"
+    assert answer.evidence_list[0].citation_anchor == "business.revenue_by_month#2012"
+
+
+def test_orchestrator_answers_2011_highest_revenue_without_cross_year_leakage() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(make_request("Which month had the highest revenue in 2011?"))
+
+    assert answer.sql_text == (
+        "SELECT month, revenue FROM revenue_by_month "
+        "WHERE month LIKE '2011-%' ORDER BY revenue DESC LIMIT 100"
+    )
+    assert answer.answer_text == "Highest revenue month was 2011-12 with revenue 1253.0."
+    assert len(answer.table_result.rows) == 12
+    assert {str(row["month"])[:4] for row in answer.table_result.rows} == {"2011"}
+    assert not any(str(row["month"]).startswith(("2012", "2026")) for row in answer.table_result.rows)
+    assert answer.evidence_list[0].source_id == "dataset_revenue_monthly_2011"
+    assert answer.evidence_list[0].citation_anchor == "business.revenue_by_month#2011"
+
+
+def test_orchestrator_does_not_attach_support_evidence_to_revenue_rows_for_mixed_question() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(
+        make_request(
+            "Which month had the highest revenue in 2011? "
+            "Show revenue trend by month. Which support ticket area needs attention?"
+        )
+    )
+
+    assert answer.table_result.columns == ("month", "revenue")
+    assert "Highest revenue month was 2011-12" in answer.answer_text
+    assert "Support ticket volume" not in answer.answer_text
+    assert tuple(evidence.source_id for evidence in answer.evidence_list) == (
+        "dataset_revenue_monthly_2011",
+    )
+
+
+def test_orchestrator_answers_support_ticket_question_from_non_revenue_dataset() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(make_request("Which support ticket area needs attention?"))
+
+    assert answer.sql_text == (
+        "SELECT month, product, severity, ticket_count, avg_resolution_hours "
+        "FROM support_ticket_summary ORDER BY ticket_count DESC LIMIT 100"
+    )
+    assert answer.table_result.columns == (
+        "month",
+        "product",
+        "severity",
+        "ticket_count",
+        "avg_resolution_hours",
+    )
+    assert answer.table_result.rows[0]["product"] == "Governed Analytics"
+    assert "Support ticket volume is led by Governed Analytics high tickets" in answer.answer_text
+    assert tuple(evidence.source_id for evidence in answer.evidence_list) == (
+        "doc_support_ops_june_2026",
+        "dataset_support_ticket_summary",
+    )
+
+
+def test_orchestrator_explain_query_uses_rag_evidence_in_synthesis() -> None:
+    orchestrator = SimpleOrchestrator()
+
+    answer = orchestrator.answer(make_request("Explain why revenue changed in H1 2026."))
+
+    assert answer.evidence_list
+    assert answer.evidence_list[0].citation_anchor == "doc_revenue_release_notes#p1"
+    assert answer.answer_text == (
+        "Revenue changed based on evidence from doc_revenue_release_notes#p1: "
+        "Revenue changes were linked to campaign timing."
+    )
+
+
+def test_orchestrator_rejects_unsupported_question_before_default_revenue_sql() -> None:
+    llm_client = RecordingLLMClient("This should not be called.")
+    orchestrator = SimpleOrchestrator(llm_client=llm_client)
+
+    answer = orchestrator.answer(make_request("hello"), trace_id="trc_unsupported_hello")
+
+    assert answer.sql_text == ""
+    assert answer.table_result.rows == (
+        {
+            "status": "blocked",
+            "reason": (
+                "I can answer governed business questions about revenue, orders, "
+                "refunds, support tickets, trends, forecasts, anomalies, or documented explanations."
+            ),
+        },
+    )
+    assert answer.warnings[0].code is ErrorCode.UNSUPPORTED_QUESTION
+    assert llm_client.requests == []
+
+
+def test_orchestrator_passes_sql_rows_and_evidence_to_answer_synthesis_llm() -> None:
+    llm_client = RecordingLLMClient("LLM used rows and evidence.")
+    orchestrator = SimpleOrchestrator(llm_client=llm_client)
+
+    answer = orchestrator.answer(
+        make_request("Which support ticket area needs attention?", role=UserRole.ANALYST),
+        trace_id="trc_answer_synthesis_context",
+    )
+
+    assert answer.answer_text == "LLM used rows and evidence."
+    synthesis_requests = [
+        request for request in llm_client.requests if request.task_type == "answer_synthesis"
+    ]
+    assert len(synthesis_requests) == 1
+    prompt = synthesis_requests[0].messages[-1]["content"]
+    assert "support_ticket_summary" in prompt
+    assert "Governed Analytics" in prompt
+    assert "ticket_count" in prompt
+    assert "doc_support_ops_june_2026#p1" in prompt
 
 
 def test_orchestrator_writes_spec_trace_events_for_success() -> None:

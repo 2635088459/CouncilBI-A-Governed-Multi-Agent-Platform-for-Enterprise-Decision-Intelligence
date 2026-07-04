@@ -151,7 +151,34 @@ def test_v2_chat_query_returns_version2_response_contract() -> None:
     assert body["data"]["table_result"]["columns"] == ["month", "revenue"]
     assert body["data"]["chart_spec"]["chart_type"] == "line"
     assert body["data"]["evidence_list"] == []
+    assert body["data"]["agent_timeline"][0]["agent_name"] == "orchestrator"
+    assert body["data"]["agent_timeline"][1]["agent_name"] == "sql_agent"
+    assert body["data"]["agent_timeline"][-1]["agent_name"] == "answer_synthesis"
     assert 0.0 <= body["data"]["confidence"] <= 1.0
+
+
+def test_v2_chat_query_rejects_unsupported_text_without_revenue_rows() -> None:
+    client: Any = TestClient(create_app())
+    body = valid_request_body()
+    body["request_id"] = "req_unsupported_hello"
+    body["question"] = "hello"
+
+    response = client.post(
+        "/api/v2/chat/query",
+        headers=auth_headers(),
+        json=body,
+    )
+
+    response_body: dict[str, Any] = response.json()
+
+    assert response.status_code == 400
+    assert response_body["error"]["code"] == "REQ_INVALID_ARGUMENT"
+    assert response_body["data"]["table_result"]["columns"] == ["status", "reason"]
+    assert response_body["data"]["table_result"]["rows"][0]["status"] == "blocked"
+    assert response_body["data"]["agent_timeline"][1]["agent_name"] == "sql_agent"
+    assert response_body["data"]["agent_timeline"][1]["status"] == "not_planned"
+    assert response_body["data"]["agent_timeline"][-1]["agent_name"] == "answer_synthesis"
+    assert response_body["data"]["agent_timeline"][-1]["status"] == "not_planned"
 
 
 def test_use_postgres_metadata_from_env_accepts_explicit_truthy_values() -> None:

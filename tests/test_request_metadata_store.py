@@ -140,8 +140,10 @@ def test_request_metadata_postgresql_schema_preserves_trace_lookup_contract() ->
     assert "request_id TEXT NOT NULL" in normalized_sql
     assert "status TEXT NOT NULL CHECK" in normalized_sql
     assert "'accepted', 'succeeded', 'failed'" in normalized_sql
+    assert "ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_sql
     assert "idx_chatbi_request_metadata_request_id" in normalized_sql
     assert "idx_chatbi_request_metadata_user_session" in normalized_sql
+    assert "idx_chatbi_request_metadata_org_trace" in normalized_sql
 
 
 def test_postgres_request_metadata_store_initializes_schema() -> None:

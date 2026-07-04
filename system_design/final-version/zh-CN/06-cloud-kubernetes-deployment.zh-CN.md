@@ -77,6 +77,10 @@
 7. smoke test。
 8. 手动批准后部署 production。
 
+最终实现必须从 React + Vite 工程构建真实浏览器前端镜像，不能再使用
+inline placeholder 页面。本地 Compose 手动测试前，需要构建 frontend、backend、
+worker 三个应用镜像。
+
 ## 6. 发布策略
 
 建议使用：
@@ -108,7 +112,7 @@ deploy/
 
 ## 8. 实施顺序
 
-1. 确认 Dockerfile 和 Compose 可以稳定启动。
+1. 确认 Dockerfile 和 Compose 可以稳定启动，并包含 React + Vite 前端镜像。
 2. 写 Kubernetes base manifests。
 3. 接入 Postgres/Redis secrets。
 4. 部署到本地 kind 或 minikube。
@@ -116,3 +120,12 @@ deploy/
 6. 加 Ingress/TLS。
 7. 加 HPA 和资源限制。
 8. 加 CI/CD 自动部署。
+
+## 9. 当前验证补充
+
+仓库现在包含 `frontend/` 浏览器运行时，`Dockerfile.frontend` 使用 Node/Vite
+构建并由 nginx 提供静态资源，`docker-compose.yml` 作为本地全栈镜像构建路径。
+frontend nginx 配置会把 `/api`、`/healthz`、`/readyz`、`/metrics` 代理到
+backend service，让浏览器手测保持同源请求。Compose smoke test 需要检查
+`http://localhost:8080` 的 UI 和
+`http://localhost:8000/healthz` 的 API。

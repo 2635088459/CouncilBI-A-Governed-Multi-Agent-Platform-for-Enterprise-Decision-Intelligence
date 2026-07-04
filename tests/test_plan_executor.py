@@ -185,6 +185,50 @@ def test_plan_executor_returns_degraded_result_when_fanout_fails() -> None:
     assert result.warnings[0].code is ErrorCode.AGENT_PARTIAL_FAILURE
 
 
+def test_plan_executor_safely_degrades_chart_failure() -> None:
+    _assert_optional_fanout_failure_degrades(
+        task_type=TaskType.CHART,
+        failing_agent=AgentName.VISUALIZATION,
+    )
+
+
+def test_plan_executor_safely_degrades_forecast_failure() -> None:
+    _assert_optional_fanout_failure_degrades(
+        task_type=TaskType.ANALYTICS,
+        failing_agent=AgentName.ANALYTICS,
+    )
+
+
+def _assert_optional_fanout_failure_degrades(
+    task_type: TaskType,
+    failing_agent: AgentName,
+) -> None:
+    trace_id = new_trace_id()
+    plan = ExecutionPlanBuilder().build(task_type)
+    executor = PlanExecutor()
+
+    result = executor.execute(
+        trace_id=trace_id,
+        plan=plan,
+        runners={
+            AgentName.SQL: FakeRunner(AgentRunResult(payload={"sql": "SELECT 1"}, confidence=0.8)),
+            failing_agent: FailingRunner(),
+            AgentName.VERIFIER: FakeRunner(AgentRunResult(payload={"verified": True}, confidence=0.9)),
+        },
+    )
+
+    assert result.outputs[AgentName.SQL].payload == {"sql": "SELECT 1"}
+    assert failing_agent not in result.outputs
+    assert result.outputs[AgentName.VERIFIER].payload == {"verified": True}
+    assert result.degraded is True
+    assert result.warnings[0].code is ErrorCode.AGENT_PARTIAL_FAILURE
+    assert result.step_outputs[failing_agent].status is AgentStepOutputStatus.DEGRADED
+    degraded_error = result.step_outputs[failing_agent].error
+    assert degraded_error is not None
+    assert degraded_error["code"] == "AGENT_PARTIAL_FAILURE"
+    assert degraded_error["retryable"] is True
+
+
 def test_plan_executor_degrades_rag_failure_and_still_runs_verifier() -> None:
     trace_id = new_trace_id()
     plan = ExecutionPlanBuilder().build(TaskType.RAG_EXPLANATION)

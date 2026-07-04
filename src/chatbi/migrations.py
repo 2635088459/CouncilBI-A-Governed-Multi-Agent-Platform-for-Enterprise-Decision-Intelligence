@@ -42,6 +42,7 @@ RUNTIME_AGENT_TRACES_TABLE = "runtime.agent_traces"
 GOVERNANCE_QUERY_AUDIT_EVENTS_TABLE = "query_audit_events"
 GOVERNANCE_SQL_RULE_HITS_TABLE = "sql_rule_hits"
 BUSINESS_REVENUE_BY_MONTH_TABLE = "business.revenue_by_month"
+BUSINESS_SUPPORT_TICKET_SUMMARY_TABLE = "business.support_ticket_summary"
 SEMANTIC_VERSIONS_TABLE = "semantic.semantic_versions"
 SEMANTIC_METRICS_TABLE = "semantic.metrics"
 SEMANTIC_DIMENSIONS_TABLE = "semantic.dimensions"
@@ -85,6 +86,8 @@ CREATE TABLE IF NOT EXISTS runtime.sessions (
     updated_at TIMESTAMPTZ NOT NULL,
     org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
+ALTER TABLE runtime.sessions
+    ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy';
 CREATE INDEX IF NOT EXISTS idx_runtime_sessions_user_created_at
     ON runtime.sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runtime_sessions_org_user_created_at
@@ -102,6 +105,8 @@ CREATE TABLE IF NOT EXISTS runtime.messages (
     created_at TIMESTAMPTZ NOT NULL,
     org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
+ALTER TABLE runtime.messages
+    ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy';
 CREATE INDEX IF NOT EXISTS idx_runtime_messages_session_created_at
     ON runtime.messages(session_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_runtime_messages_trace_id
@@ -139,12 +144,16 @@ CREATE TABLE IF NOT EXISTS runtime.query_results (
     chart_spec JSONB,
     created_at TIMESTAMPTZ NOT NULL
 );
+ALTER TABLE runtime.query_results
+    ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_query_results_trace_id
     ON runtime.query_results(trace_id);
 CREATE INDEX IF NOT EXISTS idx_runtime_query_results_message_id
     ON runtime.query_results(message_id);
 CREATE INDEX IF NOT EXISTS idx_runtime_query_results_sql_hash
     ON runtime.query_results(sql_hash);
+CREATE INDEX IF NOT EXISTS idx_runtime_query_results_org_trace_id
+    ON runtime.query_results(org_id, trace_id);
 """
 
 RUNTIME_AGENT_TRACES_TABLE_SQL = """
@@ -205,9 +214,64 @@ VALUES
     ('2026-03', 1180.0),
     ('2026-04', 1210.0),
     ('2026-05', 1290.0),
-    ('2026-06', 1350.0)
+    ('2026-06', 1350.0),
+    ('2012-01', 940.0),
+    ('2012-02', 980.0),
+    ('2012-03', 1015.0),
+    ('2012-04', 1088.0),
+    ('2012-05', 1132.0),
+    ('2012-06', 1198.0),
+    ('2012-07', 1164.0),
+    ('2012-08', 1211.0),
+    ('2012-09', 1278.0),
+    ('2012-10', 1362.0),
+    ('2012-11', 1484.0),
+    ('2012-12', 1625.0)
 ON CONFLICT (month) DO UPDATE SET
     revenue = EXCLUDED.revenue;
+INSERT INTO business.revenue_by_month (month, revenue)
+SELECT
+    to_char(month_start, 'YYYY-MM') AS month,
+    (
+        820
+        + ((extract(year FROM month_start)::integer - 2011) * 37)
+        + (extract(month FROM month_start)::integer * 24)
+        + CASE
+            WHEN extract(month FROM month_start)::integer = 11 THEN 75
+            WHEN extract(month FROM month_start)::integer = 12 THEN 145
+            ELSE 0
+        END
+    )::numeric AS revenue
+FROM generate_series(DATE '2011-01-01', DATE '2025-12-01', INTERVAL '1 month') AS month_start
+ON CONFLICT (month) DO NOTHING;
+"""
+
+BUSINESS_SUPPORT_TICKET_SUMMARY_TABLE_SQL = """
+CREATE SCHEMA IF NOT EXISTS business;
+CREATE TABLE IF NOT EXISTS business.support_ticket_summary (
+    month TEXT NOT NULL,
+    product TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+    ticket_count INTEGER NOT NULL CHECK (ticket_count >= 0),
+    avg_resolution_hours NUMERIC NOT NULL CHECK (avg_resolution_hours >= 0),
+    PRIMARY KEY (month, product, severity)
+);
+INSERT INTO business.support_ticket_summary (
+    month,
+    product,
+    severity,
+    ticket_count,
+    avg_resolution_hours
+)
+VALUES
+    ('2026-05', 'Governed Analytics', 'high', 42, 18.4),
+    ('2026-06', 'Governed Analytics', 'high', 37, 15.1),
+    ('2026-06', 'Data Connectors', 'medium', 31, 9.6),
+    ('2026-06', 'LLM Gateway', 'critical', 8, 5.2),
+    ('2026-05', 'Data Connectors', 'medium', 27, 11.3)
+ON CONFLICT (month, product, severity) DO UPDATE SET
+    ticket_count = EXCLUDED.ticket_count,
+    avg_resolution_hours = EXCLUDED.avg_resolution_hours;
 """
 
 SEMANTIC_CATALOG_TABLES_SQL = """
@@ -364,6 +428,29 @@ ON CONFLICT (source_id) DO UPDATE SET
     business_tags = EXCLUDED.business_tags,
     allowed_roles = EXCLUDED.allowed_roles;
 
+INSERT INTO knowledge.documents (
+    source_id,
+    title,
+    doc_type,
+    publish_time,
+    business_tags,
+    allowed_roles
+)
+VALUES (
+    'doc_support_ops_june_2026',
+    'Support operations weekly review',
+    'weekly_report',
+    '2026-06-30T00:00:00Z',
+    ARRAY['support', 'tickets', 'operations'],
+    ARRAY['analyst', 'admin']
+)
+ON CONFLICT (source_id) DO UPDATE SET
+    title = EXCLUDED.title,
+    doc_type = EXCLUDED.doc_type,
+    publish_time = EXCLUDED.publish_time,
+    business_tags = EXCLUDED.business_tags,
+    allowed_roles = EXCLUDED.allowed_roles;
+
 INSERT INTO knowledge.doc_chunks (
     chunk_id,
     source_id,
@@ -384,6 +471,26 @@ ON CONFLICT (chunk_id) DO UPDATE SET
     chunk_text = EXCLUDED.chunk_text,
     metadata = EXCLUDED.metadata;
 
+INSERT INTO knowledge.doc_chunks (
+    chunk_id,
+    source_id,
+    chunk_index,
+    chunk_text,
+    metadata
+)
+VALUES (
+    'doc_support_ops_june_2026_chunk_1',
+    'doc_support_ops_june_2026',
+    1,
+    'Support ticket volume increased for Governed Analytics after the enterprise workspace rollout. High-severity cases were prioritized and average resolution time improved in June.',
+    '{"fixture": "rag", "domain": "support"}'::jsonb
+)
+ON CONFLICT (chunk_id) DO UPDATE SET
+    source_id = EXCLUDED.source_id,
+    chunk_index = EXCLUDED.chunk_index,
+    chunk_text = EXCLUDED.chunk_text,
+    metadata = EXCLUDED.metadata;
+
 INSERT INTO knowledge.doc_embeddings (
     embedding_id,
     chunk_id,
@@ -397,6 +504,26 @@ VALUES (
     'local-deterministic-v1',
     8,
     'pgvector://knowledge.doc_chunks/rag_revenue_policy_2026_chunk_1'
+)
+ON CONFLICT (embedding_id) DO UPDATE SET
+    chunk_id = EXCLUDED.chunk_id,
+    embedding_model = EXCLUDED.embedding_model,
+    embedding_dimensions = EXCLUDED.embedding_dimensions,
+    vector_ref = EXCLUDED.vector_ref;
+
+INSERT INTO knowledge.doc_embeddings (
+    embedding_id,
+    chunk_id,
+    embedding_model,
+    embedding_dimensions,
+    vector_ref
+)
+VALUES (
+    'doc_support_ops_june_2026_embedding_1',
+    'doc_support_ops_june_2026_chunk_1',
+    'local-deterministic-v1',
+    8,
+    'pgvector://knowledge.doc_chunks/doc_support_ops_june_2026_chunk_1'
 )
 ON CONFLICT (embedding_id) DO UPDATE SET
     chunk_id = EXCLUDED.chunk_id,
@@ -778,6 +905,7 @@ BASE_MIGRATION_SQL_STATEMENTS = (
     V2_SCHEMAS_SQL,
     MIGRATION_METADATA_TABLE_SQL,
     BUSINESS_REVENUE_BY_MONTH_TABLE_SQL,
+    BUSINESS_SUPPORT_TICKET_SUMMARY_TABLE_SQL,
     SEMANTIC_CATALOG_TABLES_SQL,
     SEMANTIC_REVENUE_SEED_SQL,
     KNOWLEDGE_RAG_TABLES_SQL,

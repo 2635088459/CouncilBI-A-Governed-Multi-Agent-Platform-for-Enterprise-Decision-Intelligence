@@ -6,6 +6,8 @@ from chatbi.orchestration.worker import (
     AsyncTaskRequest,
     AsyncTaskStatus,
     InMemoryWorkerHandoffQueue,
+    build_mock_worker_queue,
+    run_task_status_lookup_benchmark,
 )
 
 
@@ -116,3 +118,28 @@ def test_failed_async_task_record_requires_error_message() -> None:
             status=AsyncTaskStatus.FAILED,
             payload={},
         )
+
+
+def test_task_status_lookup_benchmark_meets_p95_target_for_ten_thousand_tasks() -> None:
+    queue, target_task_id = build_mock_worker_queue(task_count=10_000)
+
+    result = run_task_status_lookup_benchmark(queue, target_task_id, run_count=20)
+
+    assert result.task_count == 10_000
+    assert result.run_count == 20
+    assert result.returned_task_id == target_task_id
+    assert result.max_latency_ms >= result.p95_latency_ms
+    assert result.meets_local_p95_target is True
+
+
+def test_task_status_lookup_benchmark_rejects_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match="task_count"):
+        build_mock_worker_queue(task_count=0)
+
+    queue, target_task_id = build_mock_worker_queue(task_count=1)
+    with pytest.raises(ValueError, match="run_count"):
+        run_task_status_lookup_benchmark(queue, target_task_id, run_count=0)
+    with pytest.raises(ValueError, match="task_id"):
+        run_task_status_lookup_benchmark(queue, "wrong_prefix", run_count=1)
+    with pytest.raises(ValueError, match="not found"):
+        run_task_status_lookup_benchmark(queue, "task_missing", run_count=1)

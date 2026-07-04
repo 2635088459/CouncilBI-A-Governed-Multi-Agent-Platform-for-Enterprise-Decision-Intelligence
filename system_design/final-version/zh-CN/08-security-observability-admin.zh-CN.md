@@ -17,7 +17,7 @@ Spec 10 做了评估、trace、metrics、release gate、runtime logs。这些内
 
 ## 2. Admin Console 应该看什么
 
-管理员面板建议包含：
+Admin Console 应该能从 React + Vite 前端进入，并展示：
 
 1. 系统健康：API 延迟、错误率、队列长度。
 2. LLM 健康：调用次数、失败率、token、成本。
@@ -120,3 +120,9 @@ Spec 10 已经是这部分的基础：
 5. 建 Admin Console 页面。
 6. 接入 metrics dashboard。
 7. 写权限测试和安全测试。
+
+## 8. 当前验证补充
+
+React 前端包含 Admin 标签页，并连接
+`/api/v2/admin/observability/summary`。前端只能接收 `VITE_API_BASE_URL`
+这类浏览器安全配置；数据库 URL、后端密钥和 provider key 不能进入前端源码或前端容器运行时。

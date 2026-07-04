@@ -69,7 +69,17 @@ def test_query_answer_converts_to_chat_query_response_payload() -> None:
         confidence=0.9,
     )
 
-    response = to_chat_query_response(answer)
+    response = to_chat_query_response(
+        answer,
+        agent_timeline=(
+            {
+                "agent_name": "sql_agent",
+                "status": "succeeded",
+                "duration_ms": 1,
+                "summary": "SQL generated.",
+            },
+        ),
+    )
 
     assert response.answer_text == answer.answer_text
     assert response.sql_text == answer.sql_text
@@ -78,6 +88,7 @@ def test_query_answer_converts_to_chat_query_response_payload() -> None:
     assert response.analytics_result == answer.analytics_result
     assert response.evidence_uncertainty is True
     assert response.retrieval_stats == answer.retrieval_stats
+    assert response.agent_timeline[0]["agent_name"] == "sql_agent"
     assert response.confidence == 0.9
 
 
@@ -103,6 +114,7 @@ def test_success_envelope_contains_trace_id_and_required_answer_fields() -> None
     assert envelope.data["sql_text"] == answer.sql_text
     assert envelope.data["table_result"] == answer.table_result
     assert envelope.data["analytics_result"] == answer.analytics_result
+    assert envelope.data["agent_timeline"] == ()
     assert envelope.data["evidence_uncertainty"] is False
     assert envelope.data["retrieval_stats"] is None
 

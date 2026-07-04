@@ -5,6 +5,13 @@ import pytest
 
 from chatbi.agents.rag_agent import RagAgentRunner
 from chatbi.core.contracts import EvidenceItem, RetrievalStats
+from chatbi.embedding_vector_rag import (
+    DocumentRecord,
+    EmbeddingVectorRagService,
+    InMemoryVectorStore,
+    MockEmbeddingClient,
+    ingest_document,
+)
 from chatbi.knowledge import (
     DocumentChunk,
     InMemoryKnowledgeStore,
@@ -191,3 +198,93 @@ def test_rag_agent_returns_uncertainty_when_retrieval_has_no_evidence() -> None:
     assert result.payload["trace_id"] == "trc_no_evidence"
     assert retrieval_stats.filtered_count == 0
     assert result.confidence == 0.2
+
+
+def test_rag_agent_retrieves_evidence_from_vector_store() -> None:
+    embedding_client = MockEmbeddingClient()
+    vector_store = InMemoryVectorStore()
+    ingest_document(
+        trace_id="trc_rag_vector_ingest",
+        document=DocumentRecord(
+            document_id="doc_vector_revenue",
+            org_id="org_vector",
+            title="Revenue Vector Policy",
+            source_type="policy",
+            owner_user_id="u_owner",
+            version="v1",
+            access_policy={"permission_tags": ("finance",)},
+        ),
+        text="Revenue recognition requires finance approval and signed contracts.",
+        embedding_client=embedding_client,
+        vector_store=vector_store,
+    )
+    from chatbi.agents.rag_agent import InMemoryVectorRagRetriever
+
+    runner = RagAgentRunner(
+        vector_retriever=InMemoryVectorRagRetriever(vector_store, embedding_client),
+        question="What supports revenue recognition?",
+        trace_id="trc_rag_vector_agent",
+        org_id="org_vector",
+        permission_tags=("finance",),
+    )
+
+    result = runner.run()
+    evidence_items = cast(tuple[EvidenceItem, ...], result.payload["evidence_items"])
+
+    assert result.payload["evidence_count"] == 1
+    assert evidence_items[0].source_id == "doc_vector_revenue"
+    assert evidence_items[0].title == "Revenue Vector Policy"
+    assert evidence_items[0].citation_anchor == "doc_vector_revenue#doc_vector_revenue_chunk_1"
+    assert result.payload["uncertainty"] is False
+
+
+def test_rag_agent_returns_uncertainty_when_vector_store_has_no_evidence() -> None:
+    from chatbi.agents.rag_agent import InMemoryVectorRagRetriever
+
+    runner = RagAgentRunner(
+        vector_retriever=InMemoryVectorRagRetriever(InMemoryVectorStore()),
+        question="What supports revenue recognition?",
+        trace_id="trc_rag_vector_empty",
+        org_id="org_vector",
+        permission_tags=("finance",),
+    )
+
+    result = runner.run()
+    retrieval_stats = cast(RetrievalStats, result.payload["retrieval_stats"])
+
+    assert result.payload["evidence_count"] == 0
+    assert result.payload["evidence_items"] == ()
+    assert result.payload["uncertainty"] is True
+    assert retrieval_stats.selected_count == 0
+    assert result.confidence == 0.2
+
+
+def test_rag_agent_can_use_embedding_vector_rag_service_directly() -> None:
+    service = EmbeddingVectorRagService()
+    service.index_document(
+        trace_id="trc_rag_service_index",
+        document=DocumentRecord(
+            document_id="doc_service_revenue",
+            org_id="org_service",
+            title="Service Revenue Policy",
+            source_type="policy",
+            owner_user_id="u_owner",
+            version="v1",
+            access_policy={"permission_tags": ("finance",)},
+        ),
+        text="Revenue recognition requires finance approval.",
+    )
+    runner = RagAgentRunner(
+        vector_retriever=service,
+        question="What supports revenue recognition?",
+        trace_id="trc_rag_service_agent",
+        org_id="org_service",
+        permission_tags=("finance",),
+    )
+
+    result = runner.run()
+    evidence_items = cast(tuple[EvidenceItem, ...], result.payload["evidence_items"])
+
+    assert result.payload["evidence_count"] == 1
+    assert evidence_items[0].source_id == "doc_service_revenue"
+    assert evidence_items[0].citation_anchor == "doc_service_revenue#doc_service_revenue_chunk_1"

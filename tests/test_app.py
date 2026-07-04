@@ -2,6 +2,7 @@ from chatbi.api.models import ApiErrorCode, ChatQueryRequestPayload, EvalRunRequ
 from chatbi.application.app import ChatBIApplication
 from chatbi.core.contracts import ErrorCode, Locale, UserRole
 from chatbi.observability import TraceSpanName, TraceSpanStatus
+from chatbi.rate_limit import InMemorySlidingWindowRateLimitStore
 from chatbi.trace_events import TraceEventStatus
 
 
@@ -40,6 +41,53 @@ def test_handle_chat_query_returns_success_envelope() -> None:
     assert envelope.data["answer_text"] == "Revenue trend is ready."
     assert envelope.data["sql_text"].startswith("SELECT ")
     assert envelope.data["table_result"].columns == ("month", "revenue")
+    agent_timeline = envelope.data["agent_timeline"]
+    assert [step["agent_name"] for step in agent_timeline] == [
+        "orchestrator",
+        "sql_agent",
+        "rag_agent",
+        "analytics_agent",
+        "visualization_agent",
+        "verifier_agent",
+        "answer_synthesis",
+    ]
+    assert agent_timeline[1]["status"] == "succeeded"
+    assert agent_timeline[2]["status"] == "not_planned"
+    assert agent_timeline[-1]["summary"] == (
+        "Final answer synthesized through the configured LLM gateway from safe SQL rows and evidence context."
+    )
+
+
+def test_handle_chat_query_rejects_unsupported_questions_without_sql_or_llm() -> None:
+    app = ChatBIApplication()
+
+    envelope = app.handle_chat_query(make_payload("hello"), trace_id="trc_app_unsupported")
+
+    assert envelope.code is ApiErrorCode.REQ_INVALID_ARGUMENT
+    assert envelope.data is not None
+    assert envelope.data["sql_text"] == ""
+    assert envelope.data["table_result"].rows[0]["status"] == "blocked"
+    timeline = envelope.data["agent_timeline"]
+    assert timeline[1]["agent_name"] == "sql_agent"
+    assert timeline[1]["status"] == "not_planned"
+    assert timeline[-1]["agent_name"] == "answer_synthesis"
+    assert timeline[-1]["status"] == "not_planned"
+
+
+def test_handle_chat_query_2012_revenue_uses_filtered_rows_and_provenance() -> None:
+    app = ChatBIApplication()
+
+    envelope = app.handle_chat_query(
+        make_payload("Which month had the highest revenue in 2012?"),
+        trace_id="trc_app_2012_highest",
+    )
+
+    assert envelope.code == 0
+    assert envelope.data is not None
+    rows = envelope.data["table_result"].rows
+    assert len(rows) == 12
+    assert {row["month"][:4] for row in rows} == {"2012"}
+    assert envelope.data["evidence_list"][0].source_id == "dataset_revenue_monthly_2012"
 
 
 def test_handle_chat_query_persists_request_for_replay() -> None:
@@ -151,6 +199,54 @@ def test_handle_chat_query_enforces_user_rate_limit() -> None:
     assert second.code is ApiErrorCode.RATE_LIMITED
     assert second.data is not None
     assert second.data["retry_after_seconds"] == 60
+    assert second.data["scope"] == "user"
+
+
+def test_handle_chat_query_enforces_org_rate_limit_across_users() -> None:
+    app = ChatBIApplication(rate_limit_per_minute=10, org_rate_limit_per_minute=1)
+
+    first = app.handle_chat_query(
+        make_payload_for_user("u_001", "Show revenue trend."),
+        trace_id="trc_org_rate_one",
+        org_id="org_shared",
+    )
+    second = app.handle_chat_query(
+        make_payload_for_user("u_002", "Show order count."),
+        trace_id="trc_org_rate_two",
+        org_id="org_shared",
+    )
+
+    assert first.code == 0
+    assert second.code is ApiErrorCode.RATE_LIMITED
+    assert second.data is not None
+    assert second.data["scope"] == "organization"
+    assert second.data["limit_per_minute"] == 1
+
+
+def test_handle_chat_query_supports_shared_rate_limit_store_across_replicas() -> None:
+    shared_user_store = InMemorySlidingWindowRateLimitStore()
+    first_replica = ChatBIApplication(
+        rate_limit_per_minute=1,
+        user_rate_limit_store=shared_user_store,
+    )
+    second_replica = ChatBIApplication(
+        rate_limit_per_minute=1,
+        user_rate_limit_store=shared_user_store,
+    )
+
+    first = first_replica.handle_chat_query(
+        make_payload("Show revenue trend."),
+        trace_id="trc_shared_rate_one",
+    )
+    second = second_replica.handle_chat_query(
+        make_payload("Show order count."),
+        trace_id="trc_shared_rate_two",
+    )
+
+    assert first.code == 0
+    assert second.code is ApiErrorCode.RATE_LIMITED
+    assert second.data is not None
+    assert second.data["scope"] == "user"
 
 
 def test_blocked_sql_is_persisted_for_replay() -> None:

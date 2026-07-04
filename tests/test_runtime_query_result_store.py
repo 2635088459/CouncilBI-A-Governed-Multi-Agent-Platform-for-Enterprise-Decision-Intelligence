@@ -131,6 +131,19 @@ def test_postgres_runtime_query_result_store_initializes_runtime_schema() -> Non
     assert connection.commits == 1
 
 
+def test_runtime_schema_initialization_is_backward_compatible_with_old_local_volumes() -> None:
+    normalized_sessions = " ".join(RUNTIME_SESSIONS_TABLE_SQL.split())
+    normalized_messages = " ".join(RUNTIME_MESSAGES_TABLE_SQL.split())
+    normalized_results = " ".join(RUNTIME_QUERY_RESULTS_TABLE_SQL.split())
+
+    assert "ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_sessions
+    assert "ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_messages
+    assert "ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_results
+    assert "idx_runtime_sessions_org_user_created_at" in normalized_sessions
+    assert "idx_runtime_messages_org_trace_id" in normalized_messages
+    assert "idx_runtime_query_results_org_trace_id" in normalized_results
+
+
 def test_postgres_runtime_query_result_store_loads_record_by_trace_id() -> None:
     connection = FakeRuntimeQueryResultConnection()
     connection.next_row = (

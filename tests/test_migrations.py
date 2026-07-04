@@ -15,6 +15,8 @@ from chatbi.migrations import (
     BASE_MIGRATION_VERSION,
     BUSINESS_REVENUE_BY_MONTH_TABLE,
     BUSINESS_REVENUE_BY_MONTH_TABLE_SQL,
+    BUSINESS_SUPPORT_TICKET_SUMMARY_TABLE,
+    BUSINESS_SUPPORT_TICKET_SUMMARY_TABLE_SQL,
     DEMO_COMPLETED_QUERY_SEED_SQL,
     DEMO_COMPLETED_QUERY_TRACE_ID,
     DEMO_TRACE_JOIN_SQL,
@@ -110,6 +112,7 @@ def test_base_migration_sql_statements_are_ordered_for_dependencies() -> None:
         V2_SCHEMAS_SQL,
         MIGRATION_METADATA_TABLE_SQL,
         BUSINESS_REVENUE_BY_MONTH_TABLE_SQL,
+        BUSINESS_SUPPORT_TICKET_SUMMARY_TABLE_SQL,
         SEMANTIC_CATALOG_TABLES_SQL,
         SEMANTIC_REVENUE_SEED_SQL,
         KNOWLEDGE_RAG_TABLES_SQL,
@@ -142,7 +145,23 @@ def test_business_revenue_by_month_table_sql_creates_seeded_read_model() -> None
     assert "INSERT INTO business.revenue_by_month" in normalized_sql
     assert "'2026-01', 1000.0" in normalized_sql
     assert "'2026-06', 1350.0" in normalized_sql
+    assert "'2012-01', 940.0" in normalized_sql
+    assert "'2012-12', 1625.0" in normalized_sql
+    assert "generate_series(DATE '2011-01-01', DATE '2025-12-01'" in normalized_sql
+    assert "ON CONFLICT (month) DO NOTHING" in normalized_sql
     assert "ON CONFLICT (month) DO UPDATE SET" in normalized_sql
+
+
+def test_business_support_ticket_summary_sql_creates_enterprise_demo_read_model() -> None:
+    normalized_sql = " ".join(BUSINESS_SUPPORT_TICKET_SUMMARY_TABLE_SQL.split())
+
+    assert BUSINESS_SUPPORT_TICKET_SUMMARY_TABLE == "business.support_ticket_summary"
+    assert "CREATE TABLE IF NOT EXISTS business.support_ticket_summary" in normalized_sql
+    assert "ticket_count INTEGER NOT NULL CHECK" in normalized_sql
+    assert "avg_resolution_hours NUMERIC NOT NULL CHECK" in normalized_sql
+    assert "'Governed Analytics', 'high', 42, 18.4" in normalized_sql
+    assert "'LLM Gateway', 'critical', 8, 5.2" in normalized_sql
+    assert "ON CONFLICT (month, product, severity) DO UPDATE SET" in normalized_sql
 
 
 def test_semantic_catalog_tables_sql_creates_metrics_dimensions_and_versions() -> None:
@@ -219,9 +238,14 @@ def test_knowledge_rag_seed_sql_reproduces_required_rag_fixture() -> None:
     assert "INSERT INTO knowledge.doc_chunks" in normalized_sql
     assert "'rag_revenue_policy_2026_chunk_1'" in normalized_sql
     assert "'{\"fixture\": \"rag\", \"metric\": \"revenue\"}'::jsonb" in normalized_sql
+    assert "'doc_support_ops_june_2026'" in normalized_sql
+    assert "'Support operations weekly review'" in normalized_sql
+    assert "ARRAY['support', 'tickets', 'operations']" in normalized_sql
+    assert "'doc_support_ops_june_2026_chunk_1'" in normalized_sql
     assert "INSERT INTO knowledge.doc_embeddings" in normalized_sql
     assert "'local-deterministic-v1'" in normalized_sql
     assert "'pgvector://knowledge.doc_chunks/rag_revenue_policy_2026_chunk_1'" in normalized_sql
+    assert "'pgvector://knowledge.doc_chunks/doc_support_ops_june_2026_chunk_1'" in normalized_sql
     assert "ON CONFLICT (embedding_id) DO UPDATE SET" in normalized_sql
 
 

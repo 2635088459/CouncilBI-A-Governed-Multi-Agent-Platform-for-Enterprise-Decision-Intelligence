@@ -17,6 +17,7 @@ from chatbi.core.contracts import (
     ChartSpec,
     ErrorCode,
     EvidenceItem,
+    AgentTraceEvent,
     Locale,
     QueryAnswer,
     QueryHistoryRecord,
@@ -79,6 +80,7 @@ class ChatQueryResponsePayload:
     evidence_list: tuple[EvidenceItem, ...] = ()
     evidence_uncertainty: bool = False
     retrieval_stats: RetrievalStats | None = None
+    agent_timeline: tuple[Mapping[str, Any], ...] = ()
     confidence: float = 1.0
     warnings: tuple[WarningMessage, ...] = ()
 
@@ -254,7 +256,10 @@ class QualityDashboardPayload:
     active_slo_count: int
 
 
-def to_chat_query_response(answer: QueryAnswer) -> ChatQueryResponsePayload:
+def to_chat_query_response(
+    answer: QueryAnswer,
+    agent_timeline: tuple[Mapping[str, Any], ...] = (),
+) -> ChatQueryResponsePayload:
     return ChatQueryResponsePayload(
         answer_text=answer.answer_text,
         sql_text=answer.sql_text,
@@ -265,6 +270,7 @@ def to_chat_query_response(answer: QueryAnswer) -> ChatQueryResponsePayload:
         evidence_list=answer.evidence_list,
         evidence_uncertainty=answer.evidence_uncertainty,
         retrieval_stats=answer.retrieval_stats,
+        agent_timeline=agent_timeline,
         confidence=answer.confidence,
         warnings=answer.warnings,
     )
@@ -281,6 +287,7 @@ def success_envelope(response: ChatQueryResponsePayload) -> ApiEnvelope:
             "evidence_list": response.evidence_list,
             "evidence_uncertainty": response.evidence_uncertainty,
             "retrieval_stats": response.retrieval_stats,
+            "agent_timeline": response.agent_timeline,
             "confidence": response.confidence,
         },
         trace_id=response.trace_id,
@@ -341,6 +348,8 @@ def api_error_for_warning(warning: WarningMessage) -> ApiErrorCode:
         return ApiErrorCode.QUERY_TIMEOUT
     if warning.code is ErrorCode.AGENT_PARTIAL_FAILURE:
         return ApiErrorCode.AGENT_PARTIAL_FAILURE
+    if warning.code is ErrorCode.UNSUPPORTED_QUESTION:
+        return ApiErrorCode.REQ_INVALID_ARGUMENT
     return ApiErrorCode.INTERNAL_ERROR
 
 
@@ -395,6 +404,17 @@ def trace_event_payload(event: TraceEvent) -> TraceEventPayload:
         ended_at=event.ended_at.isoformat() if event.ended_at is not None else None,
         latency_ms=event.latency_ms,
     )
+
+
+def agent_timeline_payload(event: AgentTraceEvent) -> Mapping[str, Any]:
+    return {
+        "agent_name": event.agent_name.value,
+        "status": event.status.value,
+        "occurred_at": event.occurred_at.isoformat(),
+        "duration_ms": event.duration_ms,
+        "summary": event.summary,
+        "agent_trace_id": event.agent_trace_id,
+    }
 
 
 def observability_trace_payload(replay: TraceReplay) -> ObservabilityTracePayload:

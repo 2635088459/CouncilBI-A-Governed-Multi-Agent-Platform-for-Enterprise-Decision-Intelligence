@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS query_audit_events (
     latency_ms INTEGER NOT NULL CHECK (latency_ms >= 0),
     created_at TIMESTAMPTZ NOT NULL
 );
+ALTER TABLE query_audit_events
+    ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy';
 CREATE INDEX IF NOT EXISTS idx_query_audit_events_trace_id
     ON query_audit_events(trace_id);
 CREATE INDEX IF NOT EXISTS idx_query_audit_events_org_trace_id

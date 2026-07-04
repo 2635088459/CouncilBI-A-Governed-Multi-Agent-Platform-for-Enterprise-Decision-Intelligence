@@ -11,11 +11,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import Mapping
 
 from chatbi.core.contracts import utc_now
 
 
 def _empty_events() -> dict[str, tuple["TraceEvent", ...]]:
+    return {}
+
+
+def _empty_metadata() -> Mapping[str, object]:
     return {}
 
 
@@ -35,6 +40,7 @@ class TraceEvent:
     started_at: datetime
     ended_at: datetime | None = None
     latency_ms: int | None = None
+    metadata: Mapping[str, object] = field(default_factory=_empty_metadata)
 
     def __post_init__(self) -> None:
         if not self.trace_id.startswith("trc_"):
@@ -102,6 +108,7 @@ class TraceEventRecorder:
         started_event: TraceEvent,
         status: TraceEventStatus = TraceEventStatus.SUCCEEDED,
         ended_at: datetime | None = None,
+        metadata: Mapping[str, object] | None = None,
     ) -> TraceEvent:
         if status is TraceEventStatus.STARTED:
             raise ValueError("completed trace event status cannot be started")
@@ -114,6 +121,7 @@ class TraceEventRecorder:
             started_at=started_event.started_at,
             ended_at=active_ended_at,
             latency_ms=_latency_ms(started_event.started_at, active_ended_at),
+            metadata=metadata or {},
         )
         self._store.add(event)
         return event

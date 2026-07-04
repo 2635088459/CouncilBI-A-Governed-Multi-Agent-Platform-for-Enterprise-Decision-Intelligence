@@ -252,7 +252,7 @@ docker compose up --build
 
 Expected local services:
 
-- frontend placeholder: `http://localhost:8080`
+- React frontend: `http://localhost:8080`
 - backend API: `http://localhost:8000`
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`

@@ -56,6 +56,38 @@
 | TC-FV07-006 | config | 验证 staging 能连接配置的 PostgreSQL 和 Redis。 |
 | TC-FV07-007 | release | rollback procedure 有文档，并至少 smoke-tested 一次。 |
 
+已实现测试覆盖：
+- `tests/test_cloud_deployment_workflow.py`
+- `tests/test_cloud_deployment_runbook.py`
+- `tests/test_cloud_secret_scan.py`
+- `tests/test_dockerfiles.py`
+- `tests/test_docker_compose_architecture.py`
+- `tests/test_k8s_runtime_architecture.py`
+
+已实现部署产物：
+- `.github/workflows/fv07-cloud-deployment.yml`
+- `docs/deployment/cloud-kubernetes-runbook.md`
+- `verification/11-cloud-kubernetes-deployment-verification.md`
+- `Dockerfile.backend`
+- `Dockerfile.worker`
+- `Dockerfile.frontend`
+- `.dockerignore`
+- `docker-compose.yml`
+- `docker/postgres/init/01-readonly-role.sh`
+- `k8s/chatbi-runtime.yaml`
+
+已实现证据：
+- `FR-FV07-001`：backend、worker、frontend Dockerfiles 均从 repository source 构建；frontend image 使用 `chatbi-build-frontend` 生成静态资源，并由 nginx 提供服务。
+- `FR-FV07-002`：manifest 定义 backend、frontend、worker、Redis、PostgreSQL、services、config maps、secret references 和 ingress routes。
+- `FR-FV07-003`：backend 暴露 `/healthz` liveness 和 `/readyz` readiness probes；Redis 和 PostgreSQL 暴露依赖 readiness probes。
+- `FR-FV07-004` / `NFR-FV07-002`：数据库凭据通过 `secretKeyRef`（`chatbi-runtime-secrets`）或 required environment placeholders 引用。`tests/test_cloud_secret_scan.py` 会拒绝 deployment artifacts 中提交的 provider keys、database passwords、plaintext database URLs 和 token fragments。
+- `FR-FV07-005` / `NFR-FV07-004`：Deployments 定义 resource requests/limits，并且 backend API 有 `HorizontalPodAutoscaler`。
+- `FR-FV07-006`：`chatbi-managed-service-config` 和 `chatbi-runtime-secrets` 支持 managed PostgreSQL/Redis staging endpoints，并且不提交凭据。
+- `FR-FV07-007`：`.github/workflows/fv07-cloud-deployment.yml` 运行 type checks、deployment tests、Docker image builds、release-gate tests、可选 staging deployment 和 smoke tests。
+- `FR-FV07-008`：staging workflow 和 runbook 文档化 backend、frontend 和 worker 的 `kubectl rollout undo` 命令。
+- `NFR-FV07-001`：staging smoke commands 会调用 `/healthz` 和 `/readyz`；本地 P99 覆盖由 `tests/test_runtime_latency_smoke.py` 提供。
+- `NFR-FV07-003`：`docs/deployment/cloud-kubernetes-runbook.md` 文档化可复现的 build、secret creation、deploy、smoke 和 rollback commands。
+
 ## 7. 追踪矩阵
 | 需求 | 验收标准 | 测试 |
 |---|---|---|
@@ -67,4 +99,3 @@
 | FR-FV07-006 | AC-FV07-003 | TC-FV07-006 |
 | FR-FV07-007 | AC-FV07-001 | TC-FV07-001, TC-FV07-005 |
 | FR-FV07-008 | AC-FV07-005 | TC-FV07-007 |
-

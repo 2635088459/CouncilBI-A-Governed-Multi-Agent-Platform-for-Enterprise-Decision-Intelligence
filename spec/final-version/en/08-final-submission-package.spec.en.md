@@ -28,6 +28,7 @@ Out of scope:
 | FR-FV08-007 | Verification report MUST include pyright, pytest, eval gate, security checks, and smoke tests. |
 | FR-FV08-008 | Demo script MUST cover user flow and admin flow. |
 | FR-FV08-009 | Final risk register MUST document known gaps and next steps. |
+| FR-FV08-010 | The React/Vite demo UI MUST render returned `chart_spec` and table rows as an actual chart, not only raw JSON or a table. |
 
 ## 4. Non-Functional Requirements
 | ID | Requirement |
@@ -45,6 +46,7 @@ Out of scope:
 | AC-FV08-003 | Demo script proves sign-in, chat query, RAG citation, admin observability, and release gate. |
 | AC-FV08-004 | Risks and not-yet-production items are explicit, not hidden. |
 | AC-FV08-005 | English and Chinese final-version docs are both present. |
+| AC-FV08-006 | A chart query such as `Plot monthly revenue for 2012` displays a chart in the local React UI when the API returns `chart_spec`. |
 
 ## 6. Test Plan
 | ID | Layer | Description |
@@ -56,6 +58,33 @@ Out of scope:
 | TC-FV08-005 | smoke | Run local or staging smoke test. |
 | TC-FV08-006 | human acceptance | Follow demo script and record pass/fail notes. |
 | TC-FV08-007 | docs parity | Verify English and Chinese final-version doc sets contain matching numbered files. |
+| TC-FV08-008 | frontend | React/Vite source renders `chart_spec` through a visible SVG chart component. |
+
+Implemented test coverage:
+- `tests/test_final_submission_package.py`
+
+Implemented submission artifacts:
+- `README.md`
+- `docs/api.md`
+- `docs/local-startup.md`
+- `docs/deployment/cloud-kubernetes-runbook.md`
+- `docs/demo-script.md`
+- `docs/risk-register.md`
+- `verification/12-final-submission-package-verification.md`
+- `spec/final-version/en/README.en.md`
+- `spec/final-version/zh-CN/README.zh-CN.md`
+- `system_design/final-version/en/README.en.md`
+- `system_design/final-version/zh-CN/README.zh-CN.md`
+
+Implemented evidence:
+- `FR-FV08-001` through `FR-FV08-003`: Root README links English/Chinese README, final-version specs, and final-version system design indexes.
+- `FR-FV08-004`: `docs/api.md` covers auth, chat, RAG/documents, admin, eval, and observability endpoints.
+- `FR-FV08-005`: `docs/local-startup.md` documents services, env vars, seed, tests, and demo flow.
+- `FR-FV08-006`: `docs/deployment/cloud-kubernetes-runbook.md` documents image build, secrets, Kubernetes deployment, smoke tests, and rollback.
+- `FR-FV08-007`: `verification/12-final-submission-package-verification.md` lists pyright, pytest, eval gate, security scan, smoke tests, and baseline mock LLM policy.
+- `FR-FV08-008`: `docs/demo-script.md` covers sign-in, chat query, RAG citation, admin observability, and release gate.
+- `FR-FV08-009`: `docs/risk-register.md` documents known gaps and next steps.
+- `NFR-FV08-001`: `tests/test_final_submission_package.py` validates final Markdown links are relative and resolve to existing local files or directories.
 
 ## 7. Traceability Matrix
 | Requirement | Acceptance Criteria | Test Case |
@@ -69,4 +98,4 @@ Out of scope:
 | FR-FV08-007 | AC-FV08-002 | TC-FV08-002, TC-FV08-003, TC-FV08-004 |
 | FR-FV08-008 | AC-FV08-003 | TC-FV08-006 |
 | FR-FV08-009 | AC-FV08-004 | TC-FV08-001 |
-
+| FR-FV08-010 | AC-FV08-006 | TC-FV08-008 |

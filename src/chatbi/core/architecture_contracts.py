@@ -51,6 +51,7 @@ class AnswerPayloadV2(TypedDict):
     table_result: TableResultV2 | None
     chart_spec: dict[str, Any] | None
     evidence_list: list[EvidenceItemV2]
+    agent_timeline: NotRequired[list[dict[str, Any]]]
     confidence: float
 
 

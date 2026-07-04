@@ -14,7 +14,7 @@ from chatbi.data_model import DataModelCatalog, build_default_data_model_catalog
 
 
 _BASE_ALLOWED_TABLES_BY_ROLE: dict[UserRole, frozenset[str] | None] = {
-    UserRole.BUSINESS_USER: frozenset({"orders", "revenue_by_month"}),
+    UserRole.BUSINESS_USER: frozenset({"orders", "revenue_by_month", "support_ticket_summary"}),
     UserRole.ANALYST: frozenset({"orders", "revenue_by_month", "users"}),
     UserRole.ADMIN: None,
 }

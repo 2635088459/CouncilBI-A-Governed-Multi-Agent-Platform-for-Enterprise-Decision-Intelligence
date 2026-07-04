@@ -221,6 +221,7 @@ def build_default_data_model_catalog() -> DataModelCatalog:
     regions = _build_regions_table()
     web_events = _build_web_events_table()
     support_tickets = _build_support_tickets_table()
+    support_ticket_summary = _build_support_ticket_summary_table()
     marketing_campaigns = _build_marketing_campaigns_table()
 
     return DataModelCatalog(
@@ -232,6 +233,7 @@ def build_default_data_model_catalog() -> DataModelCatalog:
             regions,
             web_events,
             support_tickets,
+            support_ticket_summary,
             marketing_campaigns,
             *_build_semantic_governance_tables(),
             *_build_knowledge_retrieval_tables(),
@@ -377,6 +379,34 @@ def _build_support_tickets_table() -> TableDefinition:
         domain=DataDomain.BUSINESS_ANALYTICS,
         columns=columns,
         quality_rules=_non_null_primary_key_rules(columns),
+    )
+
+
+def _build_support_ticket_summary_table() -> TableDefinition:
+    columns = (
+        ColumnDefinition("month", "string", nullable=False, is_primary_key=True),
+        ColumnDefinition("product", "string", nullable=False, is_primary_key=True),
+        ColumnDefinition("severity", "string", nullable=False, is_primary_key=True),
+        ColumnDefinition("ticket_count", "integer", nullable=False),
+        ColumnDefinition("avg_resolution_hours", "decimal", nullable=False),
+    )
+    return TableDefinition(
+        name="support_ticket_summary",
+        domain=DataDomain.BUSINESS_ANALYTICS,
+        columns=columns,
+        quality_rules=(
+            *_non_null_primary_key_rules(columns),
+            QualityRuleDefinition(
+                rule_type=QualityRuleType.NON_NEGATIVE,
+                column_name="ticket_count",
+                description="ticket_count cannot be negative.",
+            ),
+            QualityRuleDefinition(
+                rule_type=QualityRuleType.NON_NEGATIVE,
+                column_name="avg_resolution_hours",
+                description="avg_resolution_hours cannot be negative.",
+            ),
+        ),
     )
 
 

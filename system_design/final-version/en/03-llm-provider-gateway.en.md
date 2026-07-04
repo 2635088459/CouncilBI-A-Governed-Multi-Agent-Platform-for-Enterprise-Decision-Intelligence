@@ -23,7 +23,7 @@ The gateway handles:
 
 ```text
 LLMRequest
-- task_type: intent_classification | sql_generation | answer_summary | evidence_reasoning
+- task_type: intent_classification | sql_generation | answer_synthesis | answer_summary | evidence_reasoning
 - prompt_version
 - messages
 - model_policy
@@ -59,10 +59,15 @@ Different tasks can use different models:
 
 1. Intent classification: cheaper and faster model.
 2. SQL generation: stronger instruction-following model.
-3. Answer summary: stronger reasoning and writing model.
+3. Answer synthesis: grounded model call that receives bounded SQL rows and
+   evidence snippets, and must answer only from that context.
 4. Evaluation judge: separate judge model or rule/model hybrid.
 
 Model names should be configuration-driven, not hard-coded.
+
+For explanation questions such as "why" or "explain", answer synthesis must use
+the provided evidence snippets and cite their anchors when available. It must
+not return a generic trend summary when relevant evidence was supplied.
 
 ## 6. Failure Handling
 
@@ -95,3 +100,5 @@ When budget is tight, the system can downgrade models, limit context length, rat
 4. Route orchestrator model calls through the gateway.
 5. Add token/cost logging.
 6. Add failure and degradation tests.
+7. Add grounded answer-synthesis tests that prove SQL rows and RAG evidence are
+   passed through the gateway and used in the final answer.

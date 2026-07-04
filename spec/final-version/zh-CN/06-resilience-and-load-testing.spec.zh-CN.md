@@ -54,8 +54,33 @@
 | TC-FV06-003 | unit | circuit breaker 达阈值打开，cooldown 后 half-open。 |
 | TC-FV06-004 | integration | rate limit 达阈值后返回 429。 |
 | TC-FV06-005 | integration | 长 RAG indexing job 返回 task id 和状态流转。 |
-| TC-FV06-006 | integration negative | RAG failure 降级回答，不让整个 query 失败。 |
+| TC-FV06-006 | integration negative | RAG、charting、summarization、forecasting failure 降级回答，不让整个 query 失败。 |
 | TC-FV06-007 | load | mock LLM/API load test 生成 latency 和 error-rate report。 |
+
+已实现测试覆盖：
+- `tests/test_resilience.py`
+- `tests/test_llm_provider_gateway.py`
+- `tests/test_embedding_vector_rag.py`
+- `tests/test_load_testing.py`
+- `tests/test_app.py`
+- `tests/test_http_app.py`
+- `tests/test_worker_handoff.py`
+- `tests/test_plan_executor.py`
+- `tests/test_summarization.py`
+
+已实现源码模块：
+- `src/chatbi/resilience.py`
+- `src/chatbi/rate_limit.py`
+- `src/chatbi/llm/gateway.py`
+- `src/chatbi/embedding_vector_rag.py`
+- `src/chatbi/load_testing.py`
+- `src/chatbi/application/app.py`
+- `src/chatbi/orchestration/worker.py`
+- `src/chatbi/orchestration/executor.py`
+- `src/chatbi/summarization.py`
+
+已实现 NFR 证据：
+- `NFR-FV06-002`：`ChatBIApplication` 支持注入 user 和 organization 的 `RateLimitCounterStore`。默认本地实现为 `InMemorySlidingWindowRateLimitStore`；多副本部署可以在同一接口后接入 Redis/shared implementation。`tests/test_app.py::test_handle_chat_query_supports_shared_rate_limit_store_across_replicas` 验证跨 app replica 的共享 counter 行为。
 
 ## 7. 追踪矩阵
 | 需求 | 验收标准 | 测试 |
@@ -68,4 +93,3 @@
 | FR-FV06-006 | AC-FV06-004 | TC-FV06-005 |
 | FR-FV06-007 | AC-FV06-001 | TC-FV06-006 |
 | FR-FV06-008 | AC-FV06-005 | TC-FV06-007 |
-

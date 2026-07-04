@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 chatbi-build-frontend = "chatbi.frontend.build_static:main"
+chatbi-seed-final = "chatbi.final_seed:main"
 
 [project.optional-dependencies]
 dev = [

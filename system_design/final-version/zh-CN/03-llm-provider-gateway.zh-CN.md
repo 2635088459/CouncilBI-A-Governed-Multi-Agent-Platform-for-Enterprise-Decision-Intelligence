@@ -33,7 +33,7 @@ LLM Gateway 负责：
 
 ```text
 LLMRequest
-- task_type: intent_classification | sql_generation | answer_summary | evidence_reasoning
+- task_type: intent_classification | sql_generation | answer_synthesis | answer_summary | evidence_reasoning
 - prompt_version
 - messages
 - model_policy
@@ -71,7 +71,7 @@ LLMResponse
 
 1. 意图识别：便宜快速模型。
 2. SQL 生成：更稳定、指令遵循强的模型。
-3. 业务总结：表达能力好的模型。
+3. 答案合成：接收受限 SQL rows 和 evidence snippets 的 grounded 模型调用，只能基于这些上下文回答。
 4. 评估 judge：独立模型或规则混合，避免自评自夸。
 
 路由可以从配置里读，例如：
@@ -83,6 +83,10 @@ task_type=eval_judge -> provider=openai, model=gpt-4.1
 ```
 
 具体模型名后续以实际 API 和预算为准，代码中不要写死。
+
+对于 “why” 或 “explain” 这类解释问题，answer synthesis 必须使用传入的
+evidence snippets，并在可用时引用 citation anchor。只要已经提供了相关
+证据，就不能返回空泛的 trend summary。
 
 ## 6. 失败处理
 
@@ -131,3 +135,5 @@ Spec 10 里的 eval runner 和 release gate 可以使用 LLM Gateway：
 4. 把 Orchestrator 中需要模型的地方改为依赖 LLM Gateway。
 5. 加入 token/cost logging。
 6. 给 SQL/RAG/summary 路径加失败降级测试。
+7. 增加 grounded answer-synthesis 测试，证明 SQL rows 和 RAG evidence 会通过
+   Gateway 传入，并被最终答案实际使用。

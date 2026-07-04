@@ -28,6 +28,11 @@
 | FR-FV03-006 | RAG answer 必须包含使用过的 evidence chunk citation。 |
 | FR-FV03-007 | 证据不足时，系统必须返回 missing-evidence warning，不能编造事实。 |
 | FR-FV03-008 | embedding cost 和 latency 必须可观测。 |
+| FR-FV03-009 | baseline vector store 必须提供 deterministic in-memory 实现，用于本地测试和 CI。 |
+| FR-FV03-010 | RAG agent workflow 必须能通过注入的 retriever 使用 vector-store evidence，并且不能绕过 citation 校验。 |
+| FR-FV03-011 | 系统必须暴露可复用 service facade，用于 document indexing、retrieval 和 citation-grounded answering。 |
+| FR-FV03-012 | Runtime configuration 必须在 `VECTOR_STORE_URL=memory://local-vector-store` 时构建本地 embedding/vector RAG service。 |
+| FR-FV03-013 | Document indexing API 必须能把 indexed chunks 写入已配置的 embedding/vector RAG service。 |
 
 ## 4. 非功能需求
 | ID | 需求 |
@@ -56,6 +61,42 @@
 - `score: float`
 - `citation: dict`
 
+### 5.3 EmbeddingResponse
+- `vectors: tuple[tuple[float, ...], ...]`
+- `provider: str`
+- `model_name: str`
+- `dimensions: int`
+- `token_count: int`
+- `estimated_cost: float`
+- `latency_ms: int`
+
+### 5.4 Observability Event Metadata
+Embedding event 必须包含：
+- `trace_id`
+- `org_id`
+- `provider`
+- `model`
+- `latency_ms`
+- `token_count`
+- `estimated_cost`
+- `input_count`
+
+Vector search event 必须包含：
+- `trace_id`
+- `org_id`
+- `provider`
+- `latency_ms`
+- `candidate_count`
+- `returned_count`
+
+### 5.5 Runtime 配置
+本地 baseline 使用：
+- `VECTOR_STORE_URL=memory://local-vector-store`：启用 in-memory vector store。
+- `CHATBI_EMBEDDING_PROVIDER=mock`：使用 deterministic local embeddings。
+- `CHATBI_EMBEDDING_MODEL=mock-local-embedding`：默认模型名，并支持环境变量覆盖。
+
+不支持的 vector-store URL 或 embedding provider 必须在配置阶段明确失败。
+
 ## 6. 验收标准
 | ID | 标准 |
 |---|---|
@@ -64,6 +105,9 @@
 | AC-FV03-003 | RAG response 对每个有证据支撑的结论包含 citation。 |
 | AC-FV03-004 | 没有证据时返回 warning，不伪造 citation。 |
 | AC-FV03-005 | embedding 和 search event 包含 trace id、org id、latency、provider metadata。 |
+| AC-FV03-006 | RAG agent 可以从 vector retriever 返回带 citation 的 evidence；无 vector evidence 时返回 uncertainty。 |
+| AC-FV03-007 | Public RAG facade 导出 final-version embedding/vector RAG contracts，同时不破坏现有 v2 imports。 |
+| AC-FV03-008 | Document indexing endpoint 可以把 document 持久化到配置好的 local vector RAG service，并通过问题检索回来。 |
 
 ## 7. 测试计划
 | ID | 层级 | 描述 |
@@ -76,6 +120,19 @@
 | TC-FV03-006 | response | RAG answer citations 与返回 chunk 匹配。 |
 | TC-FV03-007 | response negative | 无证据时返回 missing-evidence warning。 |
 | TC-FV03-008 | benchmark | 10,000 mock chunks 的 vector search P95。 |
+| TC-FV03-009 | integration | RAG agent 通过注入的 retriever 检索 vector evidence。 |
+| TC-FV03-010 | integration negative | vector retrieval 无证据时，RAG agent 返回 uncertainty。 |
+| TC-FV03-011 | unit | Embedding/vector RAG service 完成 indexing、retrieval 和 cited answer。 |
+| TC-FV03-012 | contract | Public RAG facade 导出 final-version vector RAG service 和 contracts。 |
+| TC-FV03-013 | unit | Runtime config 构建 memory vector RAG service，并保留 embedding model 配置。 |
+| TC-FV03-014 | integration | Document index endpoint 写入配置好的 embedding/vector RAG service。 |
+
+已实现测试覆盖：
+- `tests/test_embedding_vector_rag.py`
+- `tests/test_rag_agent.py`
+
+已实现源码模块：
+- `src/chatbi/embedding_vector_rag.py`
 
 ## 8. 追踪矩阵
 | 需求 | 验收标准 | 测试 |
@@ -88,4 +145,11 @@
 | FR-FV03-006 | AC-FV03-003 | TC-FV03-006 |
 | FR-FV03-007 | AC-FV03-004 | TC-FV03-007 |
 | FR-FV03-008 | AC-FV03-005 | TC-FV03-003 |
-
+| FR-FV03-009 | AC-FV03-001 | TC-FV03-003, TC-FV03-008 |
+| FR-FV03-010 | AC-FV03-006 | TC-FV03-009, TC-FV03-010 |
+| FR-FV03-011 | AC-FV03-007 | TC-FV03-011, TC-FV03-012 |
+| FR-FV03-012 | AC-FV03-008 | TC-FV03-013 |
+| FR-FV03-013 | AC-FV03-008 | TC-FV03-014 |
+| NFR-FV03-001 | AC-FV03-001 | TC-FV03-008 |
+| NFR-FV03-003 | AC-FV03-001 | TC-FV03-001 |
+| NFR-FV03-004 | AC-FV03-002 | TC-FV03-005 |

@@ -10,7 +10,7 @@ Therefore, these capabilities must sit behind admin permissions.
 
 ## 2. Admin Console Scope
 
-The admin console should show:
+The admin console should be reachable from the React + Vite frontend and show:
 
 1. System health: latency, error rate, queue length.
 2. LLM health: calls, failures, tokens, cost.
@@ -108,3 +108,10 @@ The final version adds admin permissions, `org_id` scoping, admin UI rendering, 
 5. Build Admin Console views.
 6. Connect metrics dashboards.
 7. Add authorization and security tests.
+
+## 8. Current Verification Addendum
+
+The React frontend includes an Admin tab wired to
+`/api/v2/admin/observability/summary`. The UI must send only browser-safe
+configuration such as `VITE_API_BASE_URL`; backend-only secrets and database
+URLs must stay out of the frontend source and Docker runtime.

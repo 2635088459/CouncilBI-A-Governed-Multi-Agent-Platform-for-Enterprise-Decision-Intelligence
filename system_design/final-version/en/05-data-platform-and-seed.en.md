@@ -71,6 +71,13 @@ Good seed data should contain business patterns:
 
 This lets the demo show query, analysis, root-cause explanation, and evidence together.
 
+The local small seed must also include a deterministic multi-year monthly
+revenue read model. At minimum, `business.revenue_by_month` contains every
+month from 2011 through 2025 plus the current 2026 demo months. When a user asks
+for a specific revenue year, SQL planning and answer synthesis must filter to
+that requested year only. The platform must not answer a 2011 question with
+2012 or 2026 rows.
+
 ## 7. Data Quality Checks
 
 After seeding, verify:
@@ -80,6 +87,8 @@ After seeding, verify:
 3. Metrics produce reasonable values.
 4. Embedding count matches chunk count.
 5. Tenants remain isolated.
+6. Year-scoped revenue questions return only rows whose `month` begins with the
+   requested year, and their evidence anchors cite the same year.
 
 ## 8. Implementation Order
 

@@ -17,6 +17,7 @@ def test_data_model_includes_required_core_business_tables() -> None:
         "regions",
         "web_events",
         "support_tickets",
+        "support_ticket_summary",
         "marketing_campaigns",
     }
 

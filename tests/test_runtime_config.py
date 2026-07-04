@@ -50,6 +50,14 @@ def test_load_runtime_config_reads_required_deployment_urls() -> None:
             ),
             "REDIS_URL": "redis://redis:6379/0",
             "VECTOR_STORE_URL": "http://vector-store:6333",
+            "CHATBI_LLM_PROVIDER": "openai",
+            "CHATBI_LLM_MODEL": "gpt-4o-mini",
+            "CHATBI_LLM_TIMEOUT_MS": "2500",
+            "CHATBI_LLM_MAX_RETRIES": "2",
+            "CHATBI_LLM_BACKOFF_MS": "50",
+            "OPENAI_API_KEY": "test-key",
+            "CHATBI_EMBEDDING_PROVIDER": "mock",
+            "CHATBI_EMBEDDING_MODEL": "mock-embedding-v2",
         }
     )
 
@@ -60,6 +68,14 @@ def test_load_runtime_config_reads_required_deployment_urls() -> None:
     )
     assert config.redis_url == "redis://redis:6379/0"
     assert config.vector_store_url == "http://vector-store:6333"
+    assert config.llm_provider == "openai"
+    assert config.llm_model == "gpt-4o-mini"
+    assert config.llm_timeout_ms == 2500
+    assert config.llm_max_retries == 2
+    assert config.llm_backoff_ms == 50
+    assert config.llm_api_key_configured is True
+    assert config.embedding_provider == "mock"
+    assert config.embedding_model == "mock-embedding-v2"
     assert config.postgresql_configured is True
     assert config.readonly_postgresql_configured is True
     assert config.redis_configured is True
@@ -73,6 +89,13 @@ def test_runtime_config_treats_blank_values_as_missing() -> None:
             "CHATBI_READONLY_DATABASE_URL": "",
             "REDIS_URL": "",
             "VECTOR_STORE_URL": "   ",
+            "CHATBI_LLM_PROVIDER": " ",
+            "CHATBI_LLM_MODEL": "",
+            "CHATBI_LLM_TIMEOUT_MS": "-1",
+            "CHATBI_LLM_MAX_RETRIES": "-1",
+            "CHATBI_LLM_BACKOFF_MS": "bad",
+            "CHATBI_EMBEDDING_PROVIDER": "",
+            "CHATBI_EMBEDDING_MODEL": "",
         }
     )
 
@@ -80,7 +103,27 @@ def test_runtime_config_treats_blank_values_as_missing() -> None:
     assert config.readonly_database_url is None
     assert config.redis_url is None
     assert config.vector_store_url is None
+    assert config.llm_provider == "mock"
+    assert config.llm_model == "mock-chatbi-small"
+    assert config.llm_timeout_ms == 1000
+    assert config.llm_max_retries == 1
+    assert config.llm_backoff_ms == 25
+    assert config.embedding_provider == "mock"
+    assert config.embedding_model == "mock-local-embedding"
     assert config.ready_for_traffic is False
+
+
+def test_openai_runtime_config_defaults_to_openai_smoke_model() -> None:
+    config = load_runtime_config(
+        {
+            "CHATBI_LLM_PROVIDER": "openai",
+            "OPENAI_API_KEY": "test-key",
+        }
+    )
+
+    assert config.llm_provider == "openai"
+    assert config.llm_model == "gpt-4o-mini"
+    assert config.llm_provider_configured is True
 
 
 def test_runtime_config_readiness_depends_on_postgresql() -> None:
@@ -94,9 +137,11 @@ def test_runtime_config_readiness_depends_on_postgresql() -> None:
     assert config.dependency_status() == {
         "postgresql": {"configured": True},
         "business_postgresql_readonly": {"configured": False},
-        "redis": {"configured": False},
-        "vector_store": {"configured": False},
-    }
+            "redis": {"configured": False},
+            "vector_store": {"configured": False},
+            "llm_provider": {"configured": True, "mock": True},
+            "embedding_provider": {"configured": True, "mock": True},
+        }
 
 
 def test_database_readiness_checker_returns_true_for_select_one() -> None:

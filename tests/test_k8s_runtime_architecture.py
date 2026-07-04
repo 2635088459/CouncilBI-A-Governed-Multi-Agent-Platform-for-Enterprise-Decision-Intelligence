@@ -61,6 +61,17 @@ def test_backend_deployment_uses_runtime_dependency_environment() -> None:
     assert "path: /healthz" in backend
 
 
+def test_backend_and_worker_read_database_url_from_secret_reference() -> None:
+    text = manifest_text()
+
+    for workload_name in ("backend", "worker"):
+        workload = document_for_resource(text, "Deployment", workload_name)
+        assert "name: DATABASE_URL" in workload
+        assert "secretKeyRef:" in workload
+        assert "name: chatbi-runtime-secrets" in workload
+        assert "key: DATABASE_URL" in workload
+
+
 def test_frontend_deployment_exposes_only_backend_api_url() -> None:
     frontend = document_for_resource(manifest_text(), "Deployment", "frontend")
 
@@ -92,3 +103,42 @@ def test_redis_and_postgres_have_readiness_checks() -> None:
     assert "redis-cli" in redis
     assert "ping" in redis
     assert "pg_isready" in postgres
+
+
+def test_deployments_define_resource_requests_and_limits() -> None:
+    text = manifest_text()
+
+    for workload_name in ("backend", "frontend", "worker", "redis", "postgres"):
+        workload = document_for_resource(text, "Deployment", workload_name)
+        assert "resources:" in workload
+        assert "requests:" in workload
+        assert "limits:" in workload
+        assert "cpu:" in workload
+        assert "memory:" in workload
+
+
+def test_backend_hpa_exists_for_api_scaling_policy() -> None:
+    hpa = document_for_resource(manifest_text(), "HorizontalPodAutoscaler", "backend")
+
+    assert "kind: Deployment" in hpa
+    assert "name: backend" in hpa
+    assert "minReplicas: 2" in hpa
+    assert "maxReplicas: 6" in hpa
+    assert "averageUtilization: 70" in hpa
+
+
+def test_k8s_manifest_does_not_commit_plaintext_provider_or_database_secrets() -> None:
+    text = manifest_text()
+
+    forbidden_fragments = (
+        "chatbi_password",
+        "chatbi_readonly_password",
+        "postgresql://chatbi:",
+        "OPENAI_API_KEY:",
+        "sk-",
+        "api_key:",
+        "password:",
+        "token:",
+    )
+    for fragment in forbidden_fragments:
+        assert fragment not in text

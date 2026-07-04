@@ -5,6 +5,7 @@ from __future__ import annotations
 from hashlib import sha256
 import os
 from dataclasses import asdict, dataclass, is_dataclass
+from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence, cast
 from uuid import uuid4
 
@@ -53,6 +54,8 @@ from chatbi.core.runtime_config import (
     RuntimeConfig,
     load_runtime_config,
 )
+from chatbi.embedding_vector_config import build_embedding_vector_rag_service_from_runtime_config
+from chatbi.embedding_vector_rag import DocumentRecord, EmbeddingVectorRagService
 from chatbi.core.architecture_contracts import (
     AnswerPayloadV2,
     ChatQueryResponseV2,
@@ -85,6 +88,7 @@ from chatbi.governance import (
     postgres_guardrail_audit_log_v2_from_psycopg,
 )
 from chatbi.observability_logs import LogLevel, ObservabilityLogger
+from chatbi.llm import build_llm_client_from_runtime_config
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.orchestration.worker import (
     AsyncTaskKind,
@@ -455,11 +459,15 @@ def _build_default_chatbi_application(
     runtime_config: RuntimeConfig,
     readonly_query_connect: Callable[[str], Any] | None = None,
 ) -> ChatBIApplication:
+    llm_client = build_llm_client_from_runtime_config(runtime_config)
     if runtime_config.readonly_database_url is None:
-        return ChatBIApplication()
+        return ChatBIApplication(
+            orchestrator=SimpleOrchestrator(llm_client=llm_client)
+        )
 
     return ChatBIApplication(
         orchestrator=SimpleOrchestrator(
+            llm_client=llm_client,
             readonly_query_executor=ReadOnlyQueryExecutor(
                 readonly_query_connect or connect_psycopg,
             ),
@@ -507,9 +515,10 @@ def _build_default_auth_service(
         use_postgres_metadata
         and runtime_config is not None
         and runtime_config.database_url is not None
-        and connect is not None
     ):
-        store = postgres_auth_store_from_psycopg(connect(runtime_config.database_url))
+        store = postgres_auth_store_from_psycopg(
+            (connect or connect_psycopg)(runtime_config.database_url)
+        )
         store.initialize_schema()
     return AuthService(
         store=store,
@@ -662,6 +671,44 @@ def document_index_response_data(
     }
 
 
+def index_document_into_vector_rag(
+    *,
+    service: EmbeddingVectorRagService | None,
+    body: DocumentIndexRequestBody,
+    trace_id: str,
+    org_id: str,
+    user_id: str,
+) -> Mapping[str, object] | None:
+    if service is None:
+        return None
+    chunks = service.index_document(
+        trace_id=trace_id,
+        document=DocumentRecord(
+            document_id=body.document_id,
+            org_id=org_id,
+            title=body.title,
+            source_type=body.document_type,
+            owner_user_id=user_id,
+            version=_document_version_from_published_at(body.published_at),
+            access_policy={"permission_tags": body.permission_tags},
+        ),
+        text=body.text,
+    )
+    return {
+        "vector_indexed": True,
+        "indexed_chunk_count": len(chunks),
+        "embedding_model": service.embedding_model_name,
+    }
+
+
+def _document_version_from_published_at(published_at: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    except ValueError:
+        return published_at
+    return parsed.date().isoformat()
+
+
 def guardrail_audit_record_to_dict(record: object | None) -> dict[str, object]:
     if record is None:
         return {"exists": False}
@@ -720,6 +767,196 @@ def governance_trace_summary(
         "query_result": _governance_query_result_summary(query_result_record),
         "guardrail": guardrail_audit_record_to_dict(guardrail_record),
     }
+
+
+def admin_observability_summary_payload(
+    *,
+    runtime_config: RuntimeConfig,
+    readiness_payload: Mapping[str, object],
+    application: ChatBIApplication,
+    request_metadata_store: RequestMetadataStore,
+    runtime_query_result_store: RuntimeQueryResultStore | None,
+    guardrail_audit_log: GuardrailAuditLogV2 | None,
+    embedding_vector_rag_service: EmbeddingVectorRagService | None,
+    org_id: str,
+    user_id: str,
+) -> dict[str, object]:
+    latest_eval_run = _latest_eval_run(application, org_id)
+    release_gate = _release_gate_summary(latest_eval_run)
+    request_records = _request_metadata_for_org(request_metadata_store, org_id)
+    runtime_result_records = _runtime_query_results_for_org(runtime_query_result_store, org_id)
+    guardrail_records = _guardrail_audit_records(guardrail_audit_log)
+    org_guardrail_records = tuple(
+        record
+        for record in guardrail_records
+        if _trace_in_request_records(str(getattr(record, "trace_id", "")), request_records)
+    )
+
+    return {
+        "system_health": {
+            "status": readiness_payload.get("status", "unknown"),
+            "service": readiness_payload.get("service", runtime_config.service_name),
+            "dependencies": readiness_payload.get("dependencies", {}),
+            "request_count": len(request_records),
+        },
+        "llm_health": {
+            "provider": runtime_config.llm_provider,
+            "model": runtime_config.llm_model,
+            "configured": runtime_config.llm_provider_configured,
+            "mock": runtime_config.llm_provider == "mock",
+        },
+        "sql_safety": {
+            "guardrail_audit_count": len(org_guardrail_records),
+            "denied_count": _guardrail_decision_count(org_guardrail_records, "deny"),
+            "allowed_count": _guardrail_decision_count(org_guardrail_records, "allow"),
+            "runtime_query_result_count": len(runtime_result_records),
+        },
+        "rag_health": {
+            "embedding_provider": runtime_config.embedding_provider,
+            "embedding_model": runtime_config.embedding_model,
+            "vector_store_configured": runtime_config.vector_store_url is not None,
+            "vector_rag_active": embedding_vector_rag_service is not None,
+        },
+        "eval_summary": _eval_summary(latest_eval_run),
+        "release_gate": release_gate,
+        "audit_summary": {
+            "api_audit_count": len(_api_audit_records_for_user(application, user_id)),
+            "admin_observability_read_count": len(
+                tuple(
+                    record
+                    for record in _api_audit_records_for_user(application, user_id)
+                    if getattr(record, "endpoint", "")
+                    == "/api/v2/admin/observability/summary"
+                )
+            ),
+            "guardrail_audit_count": len(org_guardrail_records),
+        },
+    }
+
+
+def _api_audit_records_for_user(
+    application: ChatBIApplication,
+    user_id: str,
+) -> tuple[object, ...]:
+    return tuple(
+        record
+        for record in application.audit_records
+        if getattr(record, "user_id", None) == user_id
+    )
+
+
+def _latest_eval_run(application: ChatBIApplication, org_id: str) -> object | None:
+    latest_run = getattr(application.evaluation_repository, "latest_run", None)
+    if callable(latest_run):
+        return latest_run(org_id)
+    return None
+
+
+def _eval_summary(latest_eval_run: object | None) -> dict[str, object]:
+    if latest_eval_run is None:
+        return {
+            "latest_eval_run_id": None,
+            "status": "not_run",
+            "total_cases": 0,
+            "passed_cases": 0,
+            "failed_cases": 0,
+            "sql_safety_score": None,
+        }
+    return {
+        "latest_eval_run_id": getattr(latest_eval_run, "eval_run_id", None),
+        "eval_suite_id": getattr(latest_eval_run, "eval_suite_id", None),
+        "status": getattr(getattr(latest_eval_run, "status", None), "value", None),
+        "total_cases": getattr(latest_eval_run, "total_cases", 0),
+        "passed_cases": getattr(latest_eval_run, "passed_cases", 0),
+        "failed_cases": getattr(latest_eval_run, "failed_cases", 0),
+        "sql_safety_score": getattr(latest_eval_run, "sql_safety_score", None),
+    }
+
+
+def _release_gate_summary(latest_eval_run: object | None) -> dict[str, object]:
+    if latest_eval_run is None:
+        return {
+            "release_gate_passed": None,
+            "blocking": False,
+            "blocking_reason": None,
+            "failed_cases": 0,
+        }
+    failed_cases = int(getattr(latest_eval_run, "failed_cases", 0))
+    release_gate_passed = bool(getattr(latest_eval_run, "release_gate_passed", False))
+    eval_run_id = getattr(latest_eval_run, "eval_run_id", None)
+    return {
+        "eval_run_id": eval_run_id,
+        "release_gate_passed": release_gate_passed,
+        "blocking": not release_gate_passed,
+        "blocking_reason": (
+            None
+            if release_gate_passed
+            else _release_gate_blocking_reason(latest_eval_run)
+        ),
+        "failed_cases": failed_cases,
+        "eval_report_path": f"/api/v2/evals/{eval_run_id}" if isinstance(eval_run_id, str) else None,
+    }
+
+
+def _release_gate_blocking_reason(latest_eval_run: object) -> str:
+    failed_cases = int(getattr(latest_eval_run, "failed_cases", 0))
+    sql_safety_score = getattr(latest_eval_run, "sql_safety_score", None)
+    if isinstance(sql_safety_score, float) and sql_safety_score < 1.0:
+        return f"Release blocked because SQL safety score was {sql_safety_score}."
+    if failed_cases:
+        return f"Release blocked because latest eval run failed {failed_cases} case(s)."
+    return "Release blocked because latest eval run did not pass the release gate."
+
+
+def _request_metadata_for_org(
+    request_metadata_store: RequestMetadataStore,
+    org_id: str,
+) -> tuple[RequestMetadataRecord, ...]:
+    list_all = getattr(request_metadata_store, "list_all", None)
+    if not callable(list_all):
+        return ()
+    return tuple(
+        record
+        for record in cast(Sequence[RequestMetadataRecord], list_all())
+        if record.org_id == org_id
+    )
+
+
+def _runtime_query_results_for_org(
+    runtime_query_result_store: RuntimeQueryResultStore | None,
+    org_id: str,
+) -> tuple[object, ...]:
+    if runtime_query_result_store is None:
+        return ()
+    records = getattr(runtime_query_result_store, "_records", None)
+    if not isinstance(records, dict):
+        return ()
+    return tuple(
+        record
+        for record in cast(Mapping[str, object], records).values()
+        if getattr(record, "org_id", None) == org_id
+    )
+
+
+def _guardrail_audit_records(guardrail_audit_log: GuardrailAuditLogV2 | None) -> tuple[object, ...]:
+    if guardrail_audit_log is None:
+        return ()
+    list_all = getattr(guardrail_audit_log, "list_all_v2", None)
+    if not callable(list_all):
+        return ()
+    return tuple(cast(Sequence[object], list_all()))
+
+
+def _trace_in_request_records(trace_id: str, records: tuple[RequestMetadataRecord, ...]) -> bool:
+    return any(record.trace_id == trace_id for record in records)
+
+
+def _guardrail_decision_count(records: tuple[object, ...], decision_value: str) -> int:
+    return sum(
+        1
+        for record in records
+        if getattr(getattr(record, "decision", None), "value", None) == decision_value
+    )
 
 
 def _governance_query_result_summary(
@@ -936,6 +1173,11 @@ def _v2_answer_payload(data: Mapping[str, Any] | None) -> AnswerPayloadV2 | None
             _v2_evidence_item(evidence)
             for evidence in _v2_iterable(data.get("evidence_list"))
         ],
+        "agent_timeline": [
+            _json_safe_mapping(cast(Mapping[str, Any], item))
+            for item in _v2_iterable(data.get("agent_timeline"))
+            if isinstance(item, Mapping)
+        ],
         "confidence": float(data.get("confidence", 0.0)),
     }
 
@@ -1123,6 +1365,7 @@ def create_app(
     worker_handoff_queue: WorkerHandoffQueue | None = None,
     analytics_service: AnalyticsService | None = None,
     auth_service: AuthService | None = None,
+    embedding_vector_rag_service: EmbeddingVectorRagService | None = None,
 ) -> FastAPI:
     active_runtime_config = runtime_config or load_runtime_config()
     chatbi_application = application or _build_default_chatbi_application(
@@ -1158,6 +1401,11 @@ def create_app(
     active_worker_handoff_queue = worker_handoff_queue or InMemoryWorkerHandoffQueue()
     active_analytics_service = analytics_service or AnalyticsService(
         InMemoryAnalyticsRepository()
+    )
+    active_embedding_vector_rag_service = (
+        embedding_vector_rag_service
+        if embedding_vector_rag_service is not None
+        else build_embedding_vector_rag_service_from_runtime_config(active_runtime_config)
     )
     active_auth_service = auth_service or _build_default_auth_service(
         runtime_config=active_runtime_config,
@@ -1219,6 +1467,25 @@ def create_app(
                     status_code=403,
                 )
         return context, None
+
+    def require_v2_permissions(
+        auth_context: AuthContext,
+        trace_id: str,
+        request_id: str,
+        permissions: tuple[str, ...],
+    ) -> JSONResponse | None:
+        for permission in permissions:
+            try:
+                require_permission(auth_context, permission)
+            except PermissionDenied:
+                return v2_error_response(
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    code="AUTH_FORBIDDEN",
+                    message="The authenticated user is not allowed to access this resource.",
+                    status_code=403,
+                )
+        return None
 
     def authenticate_v1(
         endpoint: str,
@@ -1706,6 +1973,7 @@ def create_app(
             payload,
             trace_id=legacy_trace_id_from_v2(trace_id),
             idempotency_key=idempotency_key,
+            org_id=auth_context.org_id,
         )
         if api_envelope.code == 0:
             active_request_metadata_store.mark_succeeded(trace_id)
@@ -1746,6 +2014,8 @@ def create_app(
             request_id=request_id,
             trace_id=trace_id,
         )
+        if api_envelope.code is ApiErrorCode.RATE_LIMITED:
+            response["data"] = api_envelope.data
         return JSONResponse(
             status_code=status_code_for_envelope(api_envelope),
             content=response,
@@ -2272,6 +2542,65 @@ def create_app(
             content=response,
         )
 
+    @app.get("/api/v2/admin/observability/summary")
+    def admin_observability_summary_v2(  # pyright: ignore[reportUnusedFunction]
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(
+            request_id,
+            "req_admin_observability_summary",
+        )
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+        permission_error = require_v2_permissions(
+            auth_context,
+            trace_id,
+            active_request_id,
+            (
+                "admin:trace:read",
+                "admin:eval:read",
+                "admin:release_gate:read",
+                "admin:audit:read",
+            ),
+        )
+        if permission_error is not None:
+            return permission_error
+
+        _ready, readiness_payload = current_readiness_payload()
+        chatbi_application.record_api_audit(
+            trace_id=trace_id,
+            user_id=auth_context.user_id,
+            endpoint="/api/v2/admin/observability/summary",
+            status_code=200,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": admin_observability_summary_payload(
+                    runtime_config=active_runtime_config,
+                    readiness_payload=readiness_payload,
+                    application=chatbi_application,
+                    request_metadata_store=active_request_metadata_store,
+                    runtime_query_result_store=active_runtime_query_result_store,
+                    guardrail_audit_log=active_guardrail_audit_log_v2,
+                    embedding_vector_rag_service=active_embedding_vector_rag_service,
+                    org_id=auth_context.org_id,
+                    user_id=auth_context.user_id,
+                ),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
     @app.post("/api/v2/documents/index")
     def document_index_v2(  # pyright: ignore[reportUnusedFunction]
         body: DocumentIndexRequestBody,
@@ -2336,6 +2665,15 @@ def create_app(
                 ),
             )
         )
+        vector_result = index_document_into_vector_rag(
+            service=active_embedding_vector_rag_service,
+            body=body,
+            trace_id=active_trace_id,
+            org_id=auth_context.org_id,
+            user_id=auth_context.user_id,
+        )
+        if vector_result is not None:
+            task = active_worker_handoff_queue.mark_succeeded(task.task_id, vector_result)
         if idempotency_key is not None:
             document_index_idempotency_cache[
                 ("v2_documents_index", auth_context.org_id, idempotency_key)
@@ -2618,6 +2956,15 @@ def create_app(
                 payload=body.to_task_payload(org_id=auth_context.org_id),
             )
         )
+        vector_result = index_document_into_vector_rag(
+            service=active_embedding_vector_rag_service,
+            body=body,
+            trace_id=active_trace_id,
+            org_id=auth_context.org_id,
+            user_id=effective_user_id,
+        )
+        if vector_result is not None:
+            task = active_worker_handoff_queue.mark_succeeded(task.task_id, vector_result)
         if idempotency_key is not None:
             document_index_idempotency_cache[
                 ("v1_documents_index", auth_context.org_id, idempotency_key)

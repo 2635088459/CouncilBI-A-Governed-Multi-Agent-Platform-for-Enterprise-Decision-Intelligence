@@ -5,6 +5,8 @@ from chatbi.release_gate import (
     evaluation_sql_safety_check,
     failed_check,
     passed_check,
+    release_workflow_block_reason,
+    release_workflow_exit_code,
 )
 
 
@@ -104,6 +106,28 @@ def test_release_gate_blocks_sql_safety_below_one_hundred_percent() -> None:
     assert "SQL safety score must be 1.0" in report.failed_check.message
     assert report.checks[-1].name is ReleaseGateCheckName.HUMAN_ACCEPTANCE
     assert report.checks[-1].status == "skipped"
+
+
+def test_failed_release_gate_maps_to_blocking_workflow_exit_code_and_reason() -> None:
+    report = ReleaseGateRunner(
+        pyright_check=lambda: passed_check(ReleaseGateCheckName.PYRIGHT),
+        pytest_check=lambda: passed_check(ReleaseGateCheckName.PYTEST),
+        evaluation_check=lambda: evaluation_sql_safety_check(0.99),
+    ).run()
+
+    assert release_workflow_exit_code(report) == 1
+    assert release_workflow_block_reason(report) == "SQL safety score must be 1.0 but was 0.99."
+
+
+def test_passing_release_gate_maps_to_success_workflow_exit_code() -> None:
+    report = ReleaseGateRunner(
+        pyright_check=lambda: passed_check(ReleaseGateCheckName.PYRIGHT),
+        pytest_check=lambda: passed_check(ReleaseGateCheckName.PYTEST),
+        evaluation_check=lambda: evaluation_sql_safety_check(1.0),
+    ).run()
+
+    assert release_workflow_exit_code(report) == 0
+    assert release_workflow_block_reason(report) is None
 
 
 def test_human_acceptance_cannot_override_machine_gate_failure() -> None:

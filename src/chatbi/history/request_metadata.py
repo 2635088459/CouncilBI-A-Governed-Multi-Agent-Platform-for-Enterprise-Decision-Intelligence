@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS chatbi_request_metadata (
     org_id TEXT NOT NULL DEFAULT 'org_legacy'
 );
 
+ALTER TABLE chatbi_request_metadata
+    ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy';
+
 CREATE INDEX IF NOT EXISTS idx_chatbi_request_metadata_request_id
     ON chatbi_request_metadata (request_id);
 

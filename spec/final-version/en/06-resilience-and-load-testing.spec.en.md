@@ -54,8 +54,33 @@ Out of scope:
 | TC-FV06-003 | unit | Circuit breaker opens after threshold and half-opens after cooldown. |
 | TC-FV06-004 | integration | Rate limit returns 429 after configured threshold. |
 | TC-FV06-005 | integration | Long RAG indexing job returns task id and status transitions. |
-| TC-FV06-006 | integration negative | RAG failure degrades answer instead of failing whole query. |
+| TC-FV06-006 | integration negative | RAG, charting, summarization, and forecasting failures degrade answer instead of failing whole query. |
 | TC-FV06-007 | load | Mock LLM/API load test produces latency and error-rate report. |
+
+Implemented test coverage:
+- `tests/test_resilience.py`
+- `tests/test_llm_provider_gateway.py`
+- `tests/test_embedding_vector_rag.py`
+- `tests/test_load_testing.py`
+- `tests/test_app.py`
+- `tests/test_http_app.py`
+- `tests/test_worker_handoff.py`
+- `tests/test_plan_executor.py`
+- `tests/test_summarization.py`
+
+Implemented source modules:
+- `src/chatbi/resilience.py`
+- `src/chatbi/rate_limit.py`
+- `src/chatbi/llm/gateway.py`
+- `src/chatbi/embedding_vector_rag.py`
+- `src/chatbi/load_testing.py`
+- `src/chatbi/application/app.py`
+- `src/chatbi/orchestration/worker.py`
+- `src/chatbi/orchestration/executor.py`
+- `src/chatbi/summarization.py`
+
+Implemented NFR evidence:
+- `NFR-FV06-002`: `ChatBIApplication` accepts injectable `RateLimitCounterStore` instances for user and organization counters. The default local implementation is `InMemorySlidingWindowRateLimitStore`; multi-replica deployments can provide a Redis/shared implementation behind the same interface. `tests/test_app.py::test_handle_chat_query_supports_shared_rate_limit_store_across_replicas` verifies shared counter behavior across app replicas.
 
 ## 7. Traceability Matrix
 | Requirement | Acceptance Criteria | Test Case |
@@ -68,4 +93,3 @@ Out of scope:
 | FR-FV06-006 | AC-FV06-004 | TC-FV06-005 |
 | FR-FV06-007 | AC-FV06-001 | TC-FV06-006 |
 | FR-FV06-008 | AC-FV06-005 | TC-FV06-007 |
-

@@ -27,6 +27,7 @@
 | FR-FV05-005 | Admin dashboard API 必须暴露 system health、LLM health、SQL safety、RAG health、eval、release gate、audit。 |
 | FR-FV05-006 | release gate failure 必须对管理员可见，并阻止最终 release workflow。 |
 | FR-FV05-007 | 普通用户绝不能看到 global traces、evals、release gates、audit events。 |
+| FR-FV05-008 | Chat query response 应包含 request-scoped agent timeline，展示 planned、succeeded、failed、skipped、not-planned agent steps，但不得暴露 global observability data。 |
 
 ## 4. 非功能需求
 | ID | 需求 |
@@ -56,6 +57,17 @@
 - `timestamp: datetime`
 - `metadata: dict`
 
+### 5.3 Admin Dashboard Summary API
+- `GET /api/v2/admin/observability/summary`
+- 需要 `admin:trace:read`、`admin:eval:read`、`admin:release_gate:read`、`admin:audit:read`。
+- 使用 v2 envelope 返回 `AdminDashboardSummary` contract。
+- 成功读取时必须追加一条 `/api/v2/admin/observability/summary` 的 API audit record。
+- `release_gate` 必须包含 `release_gate_passed`、`blocking`、`blocking_reason`、`failed_cases`、`eval_report_path`。
+
+### 5.4 Release Workflow Guard
+- Release gate report 必须能转换成 workflow exit code：通过返回 `0`，失败返回非零。
+- Failed release gate report 必须暴露 blocking reason，供 CI logs 和 admin dashboard 展示。
+
 ## 6. 验收标准
 | ID | 标准 |
 |---|---|
@@ -64,6 +76,7 @@
 | AC-FV05-003 | 管理员读取敏感 observability endpoint 会生成 audit event。 |
 | AC-FV05-004 | logs 和 traces 包含 user/org context，但不泄露 secret。 |
 | AC-FV05-005 | release gate 失败会阻止 release workflow。 |
+| AC-FV05-006 | 普通 chat response 会暴露当前请求的 agent timeline，包括 SQL、RAG、analytics、visualization、verifier 和 answer synthesis 状态。 |
 
 ## 7. 测试计划
 | ID | 层级 | 描述 |
@@ -75,6 +88,24 @@
 | TC-FV05-005 | release | failed release gate 停止 release command 或 CI job。 |
 | TC-FV05-006 | tenant | 租户管理员不能读取其他租户 observability 数据。 |
 | TC-FV05-007 | benchmark | 10k mock events 下 dashboard summary P95。 |
+| TC-FV05-008 | integration | Chat query response 包含 request-scoped agent timeline，并把未参与的 agent 标记为 `not_planned`。 |
+
+已实现测试覆盖：
+- `tests/test_auth_rbac_tenant_isolation.py`
+  - Admin dashboard summary 成功访问、普通用户 403、admin read audit。
+  - tenant-scoped admin summary isolation。
+  - 10k mock request events 下 dashboard summary P95。
+  - failed release gate blocker 在 admin dashboard summary 中可见。
+- `tests/test_release_gate.py`
+  - failed release gate 映射到非零 workflow exit code 和 blocking reason。
+
+已实现源码模块：
+- `src/chatbi/api/http.py`
+- `src/chatbi/application/app.py`
+- `src/chatbi/release_gate.py`
+
+已实现本地 API：
+- `GET /api/v2/admin/observability/summary`
 
 ## 8. 追踪矩阵
 | 需求 | 验收标准 | 测试 |
@@ -86,4 +117,4 @@
 | FR-FV05-005 | AC-FV05-001 | TC-FV05-001 |
 | FR-FV05-006 | AC-FV05-005 | TC-FV05-005 |
 | FR-FV05-007 | AC-FV05-002 | TC-FV05-002 |
-
+| FR-FV05-008 | AC-FV05-006 | TC-FV05-008 |

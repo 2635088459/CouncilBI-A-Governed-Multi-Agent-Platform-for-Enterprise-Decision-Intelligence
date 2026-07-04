@@ -58,6 +58,23 @@ class ReleaseGateReport:
         return tuple(check.name.value for check in self.checks)
 
 
+def release_workflow_exit_code(report: ReleaseGateReport) -> int:
+    """Return the CI process exit code implied by a release gate report."""
+
+    return 0 if report.release_allowed else 1
+
+
+def release_workflow_block_reason(report: ReleaseGateReport) -> str | None:
+    """Return the first blocking reason a release workflow should show."""
+
+    failed_check = report.failed_check
+    if failed_check is None:
+        return None
+    if failed_check.message:
+        return failed_check.message
+    return f"{failed_check.name.value} failed."
+
+
 MachineCheck = Callable[[], ReleaseGateCheckResult]
 
 

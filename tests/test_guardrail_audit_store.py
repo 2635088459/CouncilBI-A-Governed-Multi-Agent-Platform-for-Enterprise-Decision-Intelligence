@@ -222,3 +222,10 @@ def test_postgres_guardrail_audit_factory_wraps_psycopg_connection() -> None:
     assert raw_connection.commands[0][0] == QUERY_AUDIT_EVENTS_TABLE_SQL
     assert raw_connection.commands[1][0] == SQL_RULE_HITS_TABLE_SQL
     assert raw_connection.commits == 1
+
+
+def test_guardrail_audit_schema_initialization_is_backward_compatible_with_old_local_volumes() -> None:
+    normalized_sql = " ".join(QUERY_AUDIT_EVENTS_TABLE_SQL.split())
+
+    assert "ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT 'org_legacy'" in normalized_sql
+    assert "idx_query_audit_events_org_trace_id" in normalized_sql

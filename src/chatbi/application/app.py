@@ -14,6 +14,7 @@ from chatbi.api.models import (
     EvalRunRequestPayload,
     EvalRunResultPayload,
     api_error_for_warning,
+    agent_timeline_payload,
     datasets_catalog_payload,
     envelope,
     error_envelope,
@@ -28,6 +29,9 @@ from chatbi.api.models import (
     utc_now_iso,
 )
 from chatbi.core.contracts import (
+    AgentName,
+    AgentStepStatus,
+    ErrorCode,
     Locale,
     QueryAnswer,
     QueryHistoryRecord,
@@ -61,6 +65,7 @@ from chatbi.observability_logs import (
     ObservabilityLogger,
 )
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
+from chatbi.rate_limit import InMemorySlidingWindowRateLimitStore, RateLimitCounterStore
 from chatbi.runtime_metrics import RuntimeMetricsSnapshot, runtime_metrics_snapshot
 from chatbi.trace_events import (
     InMemoryTraceEventStore,
@@ -100,14 +105,23 @@ class ChatBIApplication:
         orchestrator: SimpleOrchestrator | None = None,
         data_model_catalog: DataModelCatalog | None = None,
         rate_limit_per_minute: int = 60,
+        org_rate_limit_per_minute: int | None = None,
         trace_recorder: TraceRecorder | None = None,
         observability_logger: ObservabilityLogger | None = None,
         evaluation_repository: EvaluationRepository | None = None,
+        user_rate_limit_store: RateLimitCounterStore | None = None,
+        org_rate_limit_store: RateLimitCounterStore | None = None,
     ) -> None:
         self._orchestrator = orchestrator or SimpleOrchestrator()
         self._data_model_catalog = data_model_catalog or build_default_data_model_catalog()
         self._rate_limit_per_minute = rate_limit_per_minute
-        self._rate_limit_events: dict[str, list[float]] = {}
+        self._org_rate_limit_per_minute = (
+            rate_limit_per_minute
+            if org_rate_limit_per_minute is None
+            else org_rate_limit_per_minute
+        )
+        self._user_rate_limit_store = user_rate_limit_store or InMemorySlidingWindowRateLimitStore()
+        self._org_rate_limit_store = org_rate_limit_store or InMemorySlidingWindowRateLimitStore()
         self._idempotency_cache: dict[tuple[str, str], _IdempotencyCacheEntry] = {}
         self._audit_records: list[ApiAuditRecord] = []
         self._evaluation_scorer = EvaluationScorer()
@@ -169,6 +183,7 @@ class ChatBIApplication:
         payload: ChatQueryRequestPayload,
         trace_id: str | None = None,
         idempotency_key: str | None = None,
+        org_id: str = "org_legacy",
     ) -> ApiEnvelope:
         active_trace_id = trace_id or new_trace_id()
         started_at = monotonic()
@@ -199,6 +214,7 @@ class ChatBIApplication:
         )
         rate_limited = self._rate_limit_response(
             user_id=payload.user_id,
+            org_id=org_id,
             trace_id=active_trace_id,
             endpoint="/api/v1/chat/query",
         )
@@ -251,7 +267,10 @@ class ChatBIApplication:
         )
         answer = self._orchestrator.answer(request, trace_id=active_trace_id)
         self._record_answer_spans(answer)
-        response = to_chat_query_response(answer)
+        response = to_chat_query_response(
+            answer,
+            agent_timeline=self._agent_timeline_for_answer(answer),
+        )
         response_envelope = success_envelope(response)
 
         if answer.warnings:
@@ -296,6 +315,53 @@ class ChatBIApplication:
             status_code=200,
         )
         return response_envelope
+
+    def _agent_timeline_for_answer(self, answer: QueryAnswer) -> tuple[dict[str, object], ...]:
+        events = self._orchestrator.agent_trace_events(answer.trace_id)
+        timeline: list[dict[str, object]] = []
+        for agent_name in (
+            AgentName.ORCHESTRATOR,
+            AgentName.SQL,
+            AgentName.RAG,
+            AgentName.ANALYTICS,
+            AgentName.VISUALIZATION,
+            AgentName.VERIFIER,
+        ):
+            terminal_events = [
+                event
+                for event in events
+                if event.agent_name is agent_name and event.status is not AgentStepStatus.STARTED
+            ]
+            if not terminal_events:
+                timeline.append(
+                    {
+                        "agent_name": agent_name.value,
+                        "status": "not_planned",
+                        "duration_ms": None,
+                        "summary": "No planned step for this query type.",
+                        "agent_trace_id": None,
+                    }
+                )
+                continue
+            timeline.append(dict(agent_timeline_payload(terminal_events[-1])))
+
+        unsupported = any(
+            warning.code is ErrorCode.UNSUPPORTED_QUESTION for warning in answer.warnings
+        )
+        timeline.append(
+            {
+                "agent_name": "answer_synthesis",
+                "status": "not_planned" if unsupported else ("succeeded" if answer.answer_text else "failed"),
+                "duration_ms": None,
+                "summary": (
+                    "Answer synthesis was not run because the question was outside supported business domains."
+                    if unsupported
+                    else "Final answer synthesized through the configured LLM gateway from safe SQL rows and evidence context."
+                ),
+                "agent_trace_id": f"ans_{answer.trace_id.removeprefix('trc_')}",
+            }
+        )
+        return tuple(timeline)
 
     def handle_chat_history(
         self,
@@ -687,36 +753,70 @@ class ChatBIApplication:
         user_id: str,
         trace_id: str,
         endpoint: str,
+        org_id: str | None = None,
     ) -> ApiEnvelope | None:
         if self._rate_limit_per_minute <= 0:
-            return None
-
-        now = monotonic()
-        recent_events = [
-            event_time
-            for event_time in self._rate_limit_events.get(user_id, [])
-            if now - event_time < 60
-        ]
-        if len(recent_events) >= self._rate_limit_per_minute:
-            response = error_envelope(
-                code=ApiErrorCode.RATE_LIMITED,
-                message="Too many requests for this user. Please retry later.",
-                trace_id=trace_id,
-                data={"retry_after_seconds": 60},
+            user_rate_limited = False
+        else:
+            user_rate_limited = self._user_rate_limit_store.record_and_check_limited(
+                key=f"user:{user_id}",
+                limit_per_minute=self._rate_limit_per_minute,
+                now=monotonic(),
             )
-            self._audit(
+        if user_rate_limited:
+            return self._rate_limited_response(
                 trace_id=trace_id,
                 user_id=user_id,
                 endpoint=endpoint,
-                status_code=429,
-                error_code=ApiErrorCode.RATE_LIMITED,
+                scope="user",
+                limit_per_minute=self._rate_limit_per_minute,
             )
-            self._rate_limit_events[user_id] = recent_events
-            return response
 
-        recent_events.append(now)
-        self._rate_limit_events[user_id] = recent_events
+        now = monotonic()
+        if org_id is not None and self._org_rate_limit_per_minute > 0:
+            org_rate_limited = self._org_rate_limit_store.record_and_check_limited(
+                key=f"organization:{org_id}",
+                limit_per_minute=self._org_rate_limit_per_minute,
+                now=now,
+            )
+            if org_rate_limited:
+                return self._rate_limited_response(
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    endpoint=endpoint,
+                    scope="organization",
+                    limit_per_minute=self._org_rate_limit_per_minute,
+                )
+
         return None
+
+    def _rate_limited_response(
+        self,
+        *,
+        trace_id: str,
+        user_id: str,
+        endpoint: str,
+        scope: str,
+        limit_per_minute: int,
+    ) -> ApiEnvelope:
+        response = error_envelope(
+            code=ApiErrorCode.RATE_LIMITED,
+            message=f"Too many requests for this {scope}. Please retry later.",
+            trace_id=trace_id,
+            data={
+                "retry_after_seconds": 60,
+                "scope": scope,
+                "limit_per_minute": limit_per_minute,
+            },
+        )
+        self._audit(
+            trace_id=trace_id,
+            user_id=user_id,
+            endpoint=endpoint,
+            status_code=429,
+            error_code=ApiErrorCode.RATE_LIMITED,
+        )
+        return response
 
     def _get_cached_query(
         self,

@@ -7,6 +7,7 @@ from chatbi.api.http import create_app
 from chatbi.application.app import ChatBIApplication
 from chatbi.core.contracts import ErrorCode
 from chatbi.core.runtime_config import RuntimeConfig
+from chatbi.embedding_vector_rag import EmbeddingVectorRagService
 from chatbi.governance import GuardrailDecisionStatus, InMemoryGuardrailAuditLogV2
 from chatbi.history.query_results import RuntimeQueryResultRecord
 from chatbi.orchestration.worker import (
@@ -385,6 +386,51 @@ def test_document_index_endpoint_enqueues_indexing_task() -> None:
     assert task is not None
     assert task.kind is AsyncTaskKind.INDEXING
     assert task.payload["text"] == "Revenue dashboard drill-down filters were improved."
+
+
+def test_document_index_endpoint_writes_to_embedding_vector_rag_service() -> None:
+    queue = InMemoryWorkerHandoffQueue()
+    vector_rag_service = EmbeddingVectorRagService()
+    client: Any = TestClient(
+        create_app(
+            worker_handoff_queue=queue,
+            embedding_vector_rag_service=vector_rag_service,
+        )
+    )
+
+    response = client.post(
+        "/api/v1/documents/index",
+        headers=auth_headers("trc_index_vector_doc"),
+        params={"user_id": "u_001"},
+        json={
+            "document_id": "doc_vector_index_001",
+            "source": "release-notes",
+            "title": "Vector Index Notes",
+            "document_type": "release_note",
+            "published_at": "2026-06-29T10:00:00Z",
+            "business_tags": ["revenue", "release"],
+            "permission_tags": ["admin"],
+            "text": "Revenue dashboard vector search evidence was indexed.",
+        },
+    )
+
+    body: dict[str, Any] = response.json()
+    task = queue.get(body["data"]["task_id"])
+    answer = vector_rag_service.answer(
+        trace_id="trc_index_vector_query",
+        org_id="org_test",
+        question="What vector search evidence was indexed?",
+        permission_tags=("admin",),
+    )
+
+    assert response.status_code == 202
+    assert body["data"]["status"] == "succeeded"
+    assert task is not None
+    assert task.status is AsyncTaskStatus.SUCCEEDED
+    assert task.result["vector_indexed"] is True
+    assert task.result["indexed_chunk_count"] == 1
+    assert answer.missing_evidence_warning is None
+    assert answer.evidence_chunks[0].document_id == "doc_vector_index_001"
 
 
 def test_document_index_endpoint_reuses_task_for_same_idempotency_key() -> None:
@@ -1316,3 +1362,43 @@ def test_chat_query_rate_limit_returns_429_envelope() -> None:
     assert response.status_code == 429
     assert body["code"] == ApiErrorCode.RATE_LIMITED
     assert body["trace_id"] == "trc_rate_two"
+    assert body["data"]["scope"] == "user"
+
+
+def test_v2_chat_query_org_rate_limit_returns_429_retry_guidance() -> None:
+    client: Any = TestClient(
+        create_app(ChatBIApplication(rate_limit_per_minute=10, org_rate_limit_per_minute=1))
+    )
+
+    first = client.post(
+        "/api/v2/chat/query",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "request_id": "req_org_rate_one",
+            "session_id": "ses_org_rate_one",
+            "user_id": "u_org_rate_one",
+            "role": "business_user",
+            "locale": "en",
+            "question": "Show revenue trend.",
+        },
+    )
+    second = client.post(
+        "/api/v2/chat/query",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "request_id": "req_org_rate_two",
+            "session_id": "ses_org_rate_two",
+            "user_id": "u_org_rate_two",
+            "role": "business_user",
+            "locale": "en",
+            "question": "Show order count.",
+        },
+    )
+
+    body: dict[str, Any] = second.json()
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert body["error"]["code"] == "RATE_LIMITED"
+    assert body["error"]["retryable"] is True
+    assert body["data"]["scope"] == "organization"
+    assert body["data"]["retry_after_seconds"] == 60
