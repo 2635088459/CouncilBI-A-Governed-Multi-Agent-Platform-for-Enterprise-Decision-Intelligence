@@ -223,8 +223,8 @@ class SimpleOrchestrator:
                 )
             )
             return answer
-        task_type = self._classifier.classify(request.question)
-        plan = self._plan_builder.build(task_type)
+        task_types = self._classifier.classify(request.question)
+        plan = self._plan_builder.build(task_types)
         execution_result = self._plan_executor.execute(
             trace_id=active_trace_id,
             plan=plan,

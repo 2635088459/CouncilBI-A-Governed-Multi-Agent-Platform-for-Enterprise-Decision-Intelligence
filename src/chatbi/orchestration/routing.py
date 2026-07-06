@@ -43,80 +43,107 @@ class ExecutionPlan:
 
 
 class QuestionClassifier:
-    """Deterministic first-pass classifier for supported question types."""
+    """Multi-label classifier: a question can need SQL + RAG + Chart simultaneously."""
 
-    def classify(self, question: str) -> TaskType:
+    # Keywords that trigger each agent type
+    _RAG_KEYWORDS = (
+        "why", "reason", "cause", "explain", "what happened",
+        "incident", "report", "document", "context", "background",
+        "according to", "internal", "analysis says", "review",
+    )
+    _ANALYTICS_KEYWORDS = (
+        "forecast", "predict", "prediction", "next month", "next 30 days",
+        "anomaly", "abnormal", "outlier", "spike", "trajectory", "implied",
+        "rate", "growth rate", "change rate", "recovery",
+    )
+    _CHART_KEYWORDS = (
+        "chart", "plot", "visualize", "visualise", "graph",
+        "trend", "bar chart", "line chart", "side by side",
+    )
+
+    def classify(self, question: str) -> frozenset[TaskType]:
         normalized = question.strip().lower()
+        types: set[TaskType] = {TaskType.SQL_QUERY}
 
-        if self._contains_any(normalized, ("why", "reason", "cause", "explain")):
-            return TaskType.RAG_EXPLANATION
-        if self._contains_any(normalized, ("verify", "validate", "check answer", "audit")):
-            return TaskType.VERIFICATION
-        if self._contains_any(
-            normalized,
-            ("forecast", "predict", "prediction", "next month", "next 30 days", "anomaly", "abnormal", "outlier", "spike"),
-        ):
-            return TaskType.ANALYTICS
-        if self._contains_any(normalized, ("chart", "plot", "visualize", "trend", "graph")):
-            return TaskType.CHART
-        if self._contains_any(normalized, ("revenue", "orders", "refund", "active users", "compare", "total", "count")):
-            return TaskType.SQL_QUERY
+        if self._contains_any(normalized, self._RAG_KEYWORDS):
+            types.add(TaskType.RAG_EXPLANATION)
+        if self._contains_any(normalized, self._ANALYTICS_KEYWORDS):
+            types.add(TaskType.ANALYTICS)
+        if self._contains_any(normalized, self._CHART_KEYWORDS):
+            types.add(TaskType.CHART)
+
+        return frozenset(types)
+
+    def classify_one(self, question: str) -> TaskType:
+        """Legacy single-label interface — returns the 'richest' type."""
+        types = self.classify(question)
+        for t in (TaskType.RAG_EXPLANATION, TaskType.ANALYTICS, TaskType.CHART):
+            if t in types:
+                return t
         return TaskType.SQL_QUERY
 
     def classify_many(self, questions: tuple[str, ...]) -> tuple[TaskType, ...]:
-        return tuple(self.classify(question) for question in questions)
+        return tuple(self.classify_one(q) for q in questions)
 
     def _contains_any(self, text: str, keywords: tuple[str, ...]) -> bool:
         return any(keyword in text for keyword in keywords)
 
 
 class ExecutionPlanBuilder:
-    """Build an ordered plan that keeps SQL before fanout agents."""
+    """Build an ordered plan that keeps SQL before fanout agents.
 
-    def build(self, task_type: TaskType) -> ExecutionPlan:
+    Accepts a frozenset of TaskTypes so multiple fanout agents can run
+    in parallel after SQL completes (e.g. RAG + Visualization together).
+    """
+
+    def build(self, task_types: frozenset[TaskType] | TaskType) -> ExecutionPlan:
+        if isinstance(task_types, TaskType):
+            task_types = frozenset({task_types})
+
         sql_step = AgentPlanStep(
             agent_name=AgentName.SQL,
             stage=ExecutionStage.SQL,
         )
 
-        fanout_steps = self._fanout_steps(task_type)
-        verifier_steps = self._verifier_steps(task_type, fanout_steps)
+        fanout_steps = self._fanout_steps(task_types)
+        verifier_steps = self._verifier_steps(fanout_steps)
+
+        # Primary type for display: richest agent wins
+        primary = TaskType.SQL_QUERY
+        for t in (TaskType.RAG_EXPLANATION, TaskType.ANALYTICS, TaskType.CHART):
+            if t in task_types:
+                primary = t
+                break
 
         return ExecutionPlan(
-            task_type=task_type,
+            task_type=primary,
             steps=(sql_step, *fanout_steps, *verifier_steps),
         )
 
-    def _fanout_steps(self, task_type: TaskType) -> tuple[AgentPlanStep, ...]:
-        if task_type is TaskType.CHART:
-            return (
-                AgentPlanStep(
-                    agent_name=AgentName.VISUALIZATION,
-                    stage=ExecutionStage.FANOUT,
-                    depends_on=(AgentName.SQL,),
-                ),
-            )
-        if task_type is TaskType.ANALYTICS:
-            return (
-                AgentPlanStep(
-                    agent_name=AgentName.ANALYTICS,
-                    stage=ExecutionStage.FANOUT,
-                    depends_on=(AgentName.SQL,),
-                ),
-            )
-        if task_type is TaskType.RAG_EXPLANATION:
-            return (
-                AgentPlanStep(
-                    agent_name=AgentName.RAG,
-                    stage=ExecutionStage.FANOUT,
-                    depends_on=(AgentName.SQL,),
-                ),
-            )
-        return ()
+    def _fanout_steps(self, task_types: frozenset[TaskType]) -> tuple[AgentPlanStep, ...]:
+        steps: list[AgentPlanStep] = []
+        if TaskType.RAG_EXPLANATION in task_types:
+            steps.append(AgentPlanStep(
+                agent_name=AgentName.RAG,
+                stage=ExecutionStage.FANOUT,
+                depends_on=(AgentName.SQL,),
+            ))
+        if TaskType.CHART in task_types:
+            steps.append(AgentPlanStep(
+                agent_name=AgentName.VISUALIZATION,
+                stage=ExecutionStage.FANOUT,
+                depends_on=(AgentName.SQL,),
+            ))
+        if TaskType.ANALYTICS in task_types:
+            steps.append(AgentPlanStep(
+                agent_name=AgentName.ANALYTICS,
+                stage=ExecutionStage.FANOUT,
+                depends_on=(AgentName.SQL,),
+            ))
+        return tuple(steps)
 
     def _verifier_steps(
         self,
-        task_type: TaskType,
         fanout_steps: tuple[AgentPlanStep, ...],
     ) -> tuple[AgentPlanStep, ...]:
         verifier_dependencies = tuple(step.agent_name for step in fanout_steps) or (AgentName.SQL,)

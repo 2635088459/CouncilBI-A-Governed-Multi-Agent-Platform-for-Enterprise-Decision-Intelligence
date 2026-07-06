@@ -31,6 +31,8 @@ type EvidenceCard = {
   relevance_score?: number;
 };
 
+type ApiError = { code?: string; message?: string; retryable?: boolean; detail?: unknown };
+
 type ChatResponse = {
   trace_id?: string;
   request_id?: string;
@@ -46,7 +48,7 @@ type ChatResponse = {
     agent_timeline?: AgentTimelineItem[];
   };
   warnings?: WarningItem[];
-  error?: unknown;
+  error?: ApiError | null;
 };
 
 type LoginResponse = {
@@ -54,6 +56,33 @@ type LoginResponse = {
     user?: { user_id?: string; email?: string; display_name?: string; roles?: string[] };
     tokens?: { access_token?: string; refresh_token?: string; expires_in?: number };
   };
+};
+
+type AuditRecord = {
+  trace_id: string;
+  user_id: string;
+  role: string;
+  question: string;
+  answer_text?: string;
+  status: string;
+  error_code?: string;
+  blocked: boolean;
+  sql_row_count?: number;
+  rag_doc_count?: number;
+  has_chart: boolean;
+  latency_ms?: number;
+  accepted_at: string;
+  evidence?: Array<{ source_id: string; title: string; snippet: string }>;
+};
+
+type AuditStats = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  blocked: number;
+  success_rate: number;
+  avg_latency_ms: number;
+  unique_users: number;
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -91,8 +120,12 @@ async function postJson<T>(path: string, body: unknown, token?: string): Promise
   const resp = await fetch(apiUrl(path), { method: "POST", headers, body: JSON.stringify(body) });
   const payload = (await resp.json().catch(() => ({}))) as T;
   if (!resp.ok) {
-    const err = payload as { detail?: string };
-    throw new Error(err.detail ?? `HTTP ${resp.status}`);
+    const err = payload as { error?: ApiError; detail?: string };
+    const msg = err.error?.message ?? err.detail ?? `HTTP ${resp.status}`;
+    const code = err.error?.code;
+    const e = new Error(msg) as Error & { errorCode?: string };
+    if (code) e.errorCode = code;
+    throw e;
   }
   return payload;
 }
@@ -389,6 +422,201 @@ function LoginScreen({ onSuccess }: { onSuccess: (token: string, email: string) 
   );
 }
 
+// ─── Admin Dashboard ──────────────────────────────────────────────────────────
+
+function statusColor(status: string): string {
+  if (status === "succeeded") return "#22c55e";
+  if (status === "blocked") return "#f59e0b";
+  if (status === "failed") return "#ef4444";
+  return "#94a3b8";
+}
+
+function AuditStatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+  return (
+    <div className="audit-stat-card">
+      <div className="audit-stat-value">{value}</div>
+      <div className="audit-stat-label">{label}</div>
+      {sub && <div className="audit-stat-sub">{sub}</div>}
+    </div>
+  );
+}
+
+function AdminDashboard({ token }: { token: string }) {
+  const [records, setRecords] = useState<AuditRecord[]>([]);
+  const [stats, setStats] = useState<AuditStats | null>(null);
+  const [total, setTotal] = useState(0);
+  const [loadState, setLoadState] = useState<ApiState>("idle");
+  const [filterUser, setFilterUser] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const [expandedTrace, setExpandedTrace] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const pageSize = 20;
+
+  async function load(pg = 0) {
+    setLoadState("loading");
+    try {
+      const params = new URLSearchParams();
+      if (filterUser.trim()) params.set("user_id", filterUser.trim());
+      if (filterStatus !== "all") params.set("status", filterStatus);
+      if (filterFrom) params.set("from_date", filterFrom);
+      if (filterTo) params.set("to_date", filterTo);
+      params.set("limit", String(pageSize));
+      params.set("offset", String(pg * pageSize));
+      const resp = await getJson<{ data: { items: AuditRecord[]; total: number; stats: AuditStats } }>(
+        `/api/v2/admin/query-audit?${params}`, token
+      );
+      setRecords(resp?.data?.items ?? []);
+      setTotal(resp?.data?.total ?? 0);
+      setStats(resp?.data?.stats ?? null);
+      setPage(pg);
+      setLoadState("success");
+    } catch {
+      setLoadState("error");
+    }
+  }
+
+  function fmtTime(iso: string) {
+    const d = new Date(iso);
+    return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function fmtLatency(ms?: number) {
+    if (!ms) return "—";
+    return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+  }
+
+  const totalPages = Math.ceil(total / pageSize);
+
+  return (
+    <div className="admin-dashboard">
+      {/* Stats row */}
+      {stats && (
+        <div className="audit-stats-row">
+          <AuditStatCard label="Total Queries" value={stats.total} />
+          <AuditStatCard label="Success Rate" value={`${stats.success_rate}%`} sub={`${stats.succeeded} succeeded`} />
+          <AuditStatCard label="Blocked" value={stats.blocked} sub="by guardrail" />
+          <AuditStatCard label="Failed" value={stats.failed} />
+          <AuditStatCard label="Avg Latency" value={fmtLatency(stats.avg_latency_ms)} />
+          <AuditStatCard label="Unique Users" value={stats.unique_users} />
+        </div>
+      )}
+
+      {/* Filter bar */}
+      <div className="audit-filter-bar">
+        <input
+          className="audit-filter-input"
+          placeholder="Filter by user email…"
+          value={filterUser}
+          onChange={(e) => setFilterUser(e.target.value)}
+        />
+        <select className="audit-filter-select" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+          <option value="all">All status</option>
+          <option value="succeeded">Succeeded</option>
+          <option value="failed">Failed</option>
+          <option value="blocked">Blocked</option>
+        </select>
+        <input type="date" className="audit-filter-input date" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)} />
+        <span className="audit-filter-sep">→</span>
+        <input type="date" className="audit-filter-input date" value={filterTo} onChange={(e) => setFilterTo(e.target.value)} />
+        <button className="audit-load-btn" onClick={() => load(0)} disabled={loadState === "loading"}>
+          {loadState === "loading" ? "Loading…" : "Load"}
+        </button>
+      </div>
+
+      {/* Table */}
+      {loadState === "idle" && (
+        <div className="audit-empty">Click <strong>Load</strong> to view query audit log.</div>
+      )}
+      {loadState === "success" && records.length === 0 && (
+        <div className="audit-empty">No records found.</div>
+      )}
+      {records.length > 0 && (
+        <>
+          <div className="audit-table-wrap">
+            <table className="audit-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>User</th>
+                  <th>Role</th>
+                  <th>Question</th>
+                  <th>Status</th>
+                  <th>Latency</th>
+                  <th>SQL</th>
+                  <th>RAG</th>
+                  <th>Chart</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.map((r) => (
+                  <>
+                    <tr
+                      key={r.trace_id}
+                      className={`audit-row ${expandedTrace === r.trace_id ? "expanded" : ""}`}
+                      onClick={() => setExpandedTrace(expandedTrace === r.trace_id ? null : r.trace_id)}
+                    >
+                      <td className="audit-cell-time">{fmtTime(r.accepted_at)}</td>
+                      <td className="audit-cell-user" title={r.user_id}>{r.user_id.split("@")[0]}</td>
+                      <td><span className="audit-role-chip">{r.role}</span></td>
+                      <td className="audit-cell-question" title={r.question}>{r.question.slice(0, 72)}{r.question.length > 72 ? "…" : ""}</td>
+                      <td>
+                        <span className="audit-status-dot" style={{ background: statusColor(r.status) }} />
+                        {r.status}
+                      </td>
+                      <td>{fmtLatency(r.latency_ms)}</td>
+                      <td>{r.sql_row_count ?? "—"}</td>
+                      <td>{r.rag_doc_count ?? "—"}</td>
+                      <td>{r.has_chart ? "✓" : "—"}</td>
+                    </tr>
+                    {expandedTrace === r.trace_id && (
+                      <tr key={`${r.trace_id}-detail`} className="audit-detail-row">
+                        <td colSpan={9}>
+                          <div className="audit-detail">
+                            <div className="audit-detail-meta">
+                              <code className="trace-chip">{r.trace_id}</code>
+                              {r.error_code && <span className="audit-error-chip">{r.error_code}</span>}
+                            </div>
+                            {r.answer_text && (
+                              <div className="audit-detail-section">
+                                <p className="audit-detail-label">Answer</p>
+                                <p className="audit-detail-answer">{r.answer_text}</p>
+                              </div>
+                            )}
+                            {r.evidence && r.evidence.length > 0 && (
+                              <div className="audit-detail-section">
+                                <p className="audit-detail-label">Evidence ({r.evidence.length} sources)</p>
+                                {r.evidence.map((e, i) => (
+                                  <div className="audit-evidence-item" key={i}>
+                                    <span className="audit-evidence-source">{e.source_id}</span>
+                                    <span className="audit-evidence-snippet">{e.snippet}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {totalPages > 1 && (
+            <div className="audit-pagination">
+              <button disabled={page === 0} onClick={() => load(page - 1)}>← Prev</button>
+              <span>Page {page + 1} of {totalPages} ({total} total)</span>
+              <button disabled={page >= totalPages - 1} onClick={() => load(page + 1)}>Next →</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -398,14 +626,17 @@ export default function App() {
   const [locale, setLocale] = useState("en");
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0]);
   const [chatState, setChatState] = useState<ApiState>("idle");
+  const [chatErrorCode, setChatErrorCode] = useState("");
   const [chatResponse, setChatResponse] = useState<ChatResponse | undefined>();
   const [chatError, setChatError] = useState("");
   const [timelineOpen, setTimelineOpen] = useState(true);
   const [devOpen, setDevOpen] = useState(false);
   const [adminPayload, setAdminPayload] = useState<unknown>(null);
   const [adminState, setAdminState] = useState<ApiState>("idle");
+  const [activeTab, setActiveTab] = useState<"chat" | "admin">("chat");
 
   const sessionId = useRef(newSessionId()).current;
+  const isAdmin = role === "admin";
 
   const isLoggedIn = Boolean(token);
 
@@ -426,6 +657,7 @@ export default function App() {
     if (!question.trim()) return;
     setChatState("loading");
     setChatError("");
+    setChatErrorCode("");
     setChatResponse(undefined);
     try {
       const payload = await postJson<ChatResponse>(
@@ -434,11 +666,18 @@ export default function App() {
         token
       );
       setChatResponse(payload);
-      setChatState(payload.error ? "error" : "success");
-      if (payload.error) setChatError(String(payload.error));
+      if (payload.error) {
+        setChatState("error");
+        setChatErrorCode(payload.error.code ?? "");
+        setChatError(payload.error.message ?? payload.error.code ?? "An error occurred.");
+      } else {
+        setChatState("success");
+      }
     } catch (err) {
       setChatState("error");
-      setChatError(err instanceof Error ? err.message : String(err));
+      const e = err as Error & { errorCode?: string };
+      setChatErrorCode(e.errorCode ?? "");
+      setChatError(e.message || String(err));
     }
   }
 
@@ -541,7 +780,34 @@ export default function App() {
 
         {/* ── Main content ── */}
         <main className="main-content">
-          {/* Question form */}
+          {/* Tab bar — only show Admin tab when role is admin */}
+          {isAdmin && (
+            <div className="tab-bar">
+              <button
+                className={`tab-btn ${activeTab === "chat" ? "active" : ""}`}
+                type="button"
+                onClick={() => setActiveTab("chat")}
+              >
+                Chat Query
+              </button>
+              <button
+                className={`tab-btn ${activeTab === "admin" ? "active" : ""}`}
+                type="button"
+                onClick={() => setActiveTab("admin")}
+              >
+                Admin Audit
+              </button>
+            </div>
+          )}
+
+          {/* Admin dashboard */}
+          {activeTab === "admin" && isAdmin && (
+            <AdminDashboard token={token} />
+          )}
+
+          {/* Question form + answer — hidden when admin tab active */}
+          {activeTab === "chat" && (
+          <div className="chat-tab-content">
           <form className="question-form" onSubmit={submitQuestion}>
             <div className="question-form-inner">
               <textarea
@@ -582,7 +848,32 @@ export default function App() {
 
               {/* Error */}
               {chatState === "error" && chatError && (
-                <div className="answer-error">{chatError}</div>
+                chatErrorCode === "SQL_GUARDRAIL_BLOCKED" ? (
+                  <div className="answer-blocked">
+                    <div className="blocked-icon">⊘</div>
+                    <div className="blocked-body">
+                      <p className="blocked-title">Query blocked — data modifications are not permitted</p>
+                      <p className="blocked-desc">
+                        ChatBI is a read-only analytics platform. Requests to insert, update, delete,
+                        or otherwise modify data are automatically rejected by the security guardrail.
+                        If you have a legitimate data correction request, contact your data team directly.
+                      </p>
+                    </div>
+                  </div>
+                ) : chatErrorCode === "VALIDATION_ERROR" ? (
+                  <div className="answer-blocked answer-blocked--warn">
+                    <div className="blocked-icon">⚠</div>
+                    <div className="blocked-body">
+                      <p className="blocked-title">Request rejected — invalid query format</p>
+                      <p className="blocked-desc">{chatError}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="answer-error">
+                    {chatErrorCode && <span className="answer-error-code">{chatErrorCode}</span>}
+                    {chatError}
+                  </div>
+                )
               )}
 
               {/* Loading skeleton */}
@@ -620,6 +911,8 @@ export default function App() {
               {/* Agent timeline */}
               <AgentTimeline items={timeline} open={timelineOpen} onToggle={() => setTimelineOpen(!timelineOpen)} />
             </div>
+          )}
+          </div>
           )}
         </main>
       </div>

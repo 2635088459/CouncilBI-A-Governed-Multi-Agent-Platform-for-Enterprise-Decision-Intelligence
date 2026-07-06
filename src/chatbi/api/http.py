@@ -88,7 +88,15 @@ from chatbi.governance import (
     postgres_guardrail_audit_log_v2_from_psycopg,
 )
 from chatbi.observability_logs import LogLevel, ObservabilityLogger
+from chatbi.governance.query_audit import QueryAuditLog, QueryAuditRecord
 from chatbi.llm import build_llm_client_from_runtime_config
+from chatbi.knowledge import (
+    ChunkEmbedding,
+    DocumentChunk,
+    InMemoryKnowledgeStore,
+    KnowledgeDocument,
+    text_embedding,
+)
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.orchestration.worker import (
     AsyncTaskKind,
@@ -367,6 +375,8 @@ def status_code_for_envelope(envelope: ApiEnvelope) -> int:
         return 401
     if envelope.code is ApiErrorCode.AUTH_FORBIDDEN:
         return 403
+    if envelope.code is ApiErrorCode.SQL_GUARDRAIL_BLOCKED:
+        return 403
     return 200
 
 
@@ -455,19 +465,80 @@ def _build_default_runtime_query_result_store(
     return store
 
 
+def _load_knowledge_store_from_db(
+    connect_fn: Callable[[str], Any],
+    database_url: str,
+) -> InMemoryKnowledgeStore:
+    store = InMemoryKnowledgeStore()
+    try:
+        conn = connect_fn(database_url)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT source_id, title, doc_type, publish_time, business_tags, allowed_roles"
+                " FROM knowledge.documents"
+            )
+            for row in cur.fetchall():
+                source_id, title, doc_type, publish_time, business_tags, allowed_roles = row
+                store.save_document(
+                    KnowledgeDocument(
+                        source_id=source_id,
+                        title=title,
+                        doc_type=doc_type,
+                        publish_time=publish_time,
+                        tags=tuple(business_tags or []),
+                        allowed_roles=tuple(allowed_roles or []),
+                    )
+                )
+            cur.execute(
+                "SELECT chunk_id, source_id, chunk_index, chunk_text"
+                " FROM knowledge.doc_chunks ORDER BY source_id, chunk_index"
+            )
+            for row in cur.fetchall():
+                chunk_id, source_id, chunk_index, chunk_text = row
+                if source_id not in store._documents_by_source_id:
+                    continue
+                store.save_chunk(
+                    DocumentChunk(
+                        chunk_id=chunk_id,
+                        source_id=source_id,
+                        chunk_index=chunk_index,
+                        chunk_text=chunk_text,
+                    )
+                )
+                store.save_embedding(
+                    ChunkEmbedding(
+                        embedding_id=f"{chunk_id}_emb",
+                        chunk_id=chunk_id,
+                        embedding_vector=text_embedding(chunk_text),
+                    )
+                )
+    except Exception:
+        pass  # DB not ready yet; fall back to empty store
+    return store
+
+
 def _build_default_chatbi_application(
     runtime_config: RuntimeConfig,
     readonly_query_connect: Callable[[str], Any] | None = None,
 ) -> ChatBIApplication:
     llm_client = build_llm_client_from_runtime_config(runtime_config)
+    knowledge_store = (
+        _load_knowledge_store_from_db(connect_psycopg, runtime_config.database_url)
+        if runtime_config.database_url
+        else InMemoryKnowledgeStore()
+    )
     if runtime_config.readonly_database_url is None:
         return ChatBIApplication(
-            orchestrator=SimpleOrchestrator(llm_client=llm_client)
+            orchestrator=SimpleOrchestrator(
+                llm_client=llm_client,
+                knowledge_store=knowledge_store,
+            )
         )
 
     return ChatBIApplication(
         orchestrator=SimpleOrchestrator(
             llm_client=llm_client,
+            knowledge_store=knowledge_store,
             readonly_query_executor=ReadOnlyQueryExecutor(
                 readonly_query_connect or connect_psycopg,
             ),
@@ -1412,6 +1483,14 @@ def create_app(
         connect=auth_connect,
         use_postgres_metadata=use_postgres_metadata,
     )
+    active_query_audit_log: QueryAuditLog | None = None
+    if active_runtime_config.database_url:
+        try:
+            _audit_conn = connect_psycopg(active_runtime_config.database_url)
+            active_query_audit_log = QueryAuditLog(_audit_conn)
+            active_query_audit_log.initialize_schema()
+        except Exception:
+            active_query_audit_log = None
     document_index_idempotency_cache: dict[
         tuple[str, ...],
         DocumentIndexIdempotencyEntry,
@@ -1969,12 +2048,63 @@ def create_app(
             locale=Locale(str(body["locale"])),
             role=UserRole(effective_role),
         )
+        _query_started_at = __import__("time").perf_counter()
         api_envelope = chatbi_application.handle_chat_query(
             payload,
             trace_id=legacy_trace_id_from_v2(trace_id),
             idempotency_key=idempotency_key,
             org_id=auth_context.org_id,
         )
+        _query_latency_ms = int((__import__("time").perf_counter() - _query_started_at) * 1000)
+        if active_query_audit_log is not None:
+            try:
+                _data = api_envelope.data or {}
+                _tbl = _data.get("table_result") if isinstance(_data, dict) else None
+                _sql_rows = 0
+                if _tbl is not None:
+                    if isinstance(_tbl, dict):
+                        _sql_rows = len(_tbl.get("rows", []))
+                    elif hasattr(_tbl, "rows"):
+                        _sql_rows = len(_tbl.rows or [])
+                _evs = _data.get("evidence_list", []) if isinstance(_data, dict) else []
+                if not isinstance(_evs, (list, tuple)):
+                    _evs = []
+                _ev_simple = [
+                    {"source_id": e.get("source_id", ""), "title": e.get("title", ""), "snippet": (e.get("snippet") or "")[:200]}
+                    for e in _evs if isinstance(e, dict)
+                ]
+                _blocked = api_envelope.code not in (0, ApiErrorCode.RATE_LIMITED) and any(
+                    "blocked" in (w.get("message") or "").lower() or "block" in (w.get("code") or "").lower()
+                    for w in (api_envelope.warnings or [])
+                    if isinstance(w, dict)
+                )
+                _status = (
+                    "blocked" if _blocked
+                    else "succeeded" if api_envelope.code == 0
+                    else "failed"
+                )
+                active_query_audit_log.save(QueryAuditRecord(
+                    trace_id=trace_id,
+                    request_id=request_id,
+                    user_id=effective_user_id,
+                    org_id=auth_context.org_id,
+                    session_id=str(body["session_id"]),
+                    role=effective_role,
+                    question=str(body["question"]),
+                    answer_text=_data.get("answer_text") if isinstance(_data, dict) else None,
+                    status=_status,
+                    error_code=str(api_envelope.code) if api_envelope.code != 0 else None,
+                    blocked=_blocked,
+                    sql_row_count=_sql_rows,
+                    rag_doc_count=len(_evs),
+                    has_chart=bool(isinstance(_data, dict) and _data.get("chart_spec")),
+                    evidence_json=__import__("json").dumps(_ev_simple),
+                    latency_ms=_query_latency_ms,
+                    finished_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                ))
+            except Exception:
+                pass
+
         if api_envelope.code == 0:
             active_request_metadata_store.mark_succeeded(trace_id)
             if active_runtime_query_result_store is not None:
@@ -2601,6 +2731,81 @@ def create_app(
             },
         )
 
+    @app.get("/api/v2/admin/query-audit")
+    def admin_query_audit_list(  # pyright: ignore[reportUnusedFunction]
+        user_id: str | None = None,
+        status: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        import datetime as _dt
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_admin_query_audit")
+        auth_context, auth_error = authenticate_v2(authorization, trace_id, active_request_id)
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+        if "admin:audit:read" not in (auth_context.permissions or []):
+            return cast(JSONResponse, v2_error_response(
+                request_id=active_request_id, trace_id=trace_id,
+                code="AUTH_FORBIDDEN", message="Admin audit permission required.", status_code=403,
+            ))
+        if active_query_audit_log is None:
+            return JSONResponse(status_code=200, content={
+                "trace_id": trace_id, "request_id": active_request_id,
+                "data": {"items": [], "total": 0, "stats": {}}, "warnings": [], "error": None,
+            })
+        from_dt = _dt.datetime.fromisoformat(from_date) if from_date else None
+        to_dt = _dt.datetime.fromisoformat(to_date) if to_date else None
+        records = active_query_audit_log.list_recent(
+            org_id=auth_context.org_id, user_id=user_id or None,
+            status=status or None, from_dt=from_dt, to_dt=to_dt,
+            limit=min(limit, 200), offset=offset,
+        )
+        total = active_query_audit_log.count_recent(
+            org_id=auth_context.org_id, user_id=user_id or None,
+            status=status or None, from_dt=from_dt, to_dt=to_dt,
+        )
+        stats = active_query_audit_log.stats(org_id=auth_context.org_id)
+        return JSONResponse(status_code=200, content={
+            "trace_id": trace_id, "request_id": active_request_id,
+            "data": {
+                "items": [r.to_dict() for r in records],
+                "total": total,
+                "stats": stats,
+            },
+            "warnings": [], "error": None,
+        })
+
+    @app.get("/api/v2/admin/query-audit/{audit_trace_id}")
+    def admin_query_audit_detail(  # pyright: ignore[reportUnusedFunction]
+        audit_trace_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_admin_query_audit_detail")
+        auth_context, auth_error = authenticate_v2(authorization, trace_id, active_request_id)
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+        if "admin:audit:read" not in (auth_context.permissions or []):
+            return cast(JSONResponse, v2_error_response(
+                request_id=active_request_id, trace_id=trace_id,
+                code="AUTH_FORBIDDEN", message="Admin audit permission required.", status_code=403,
+            ))
+        if active_query_audit_log is None:
+            return JSONResponse(status_code=404, content={"error": "Audit log not available."})
+        record = active_query_audit_log.get(audit_trace_id)
+        if record is None:
+            return JSONResponse(status_code=404, content={"error": "Record not found."})
+        return JSONResponse(status_code=200, content={
+            "trace_id": trace_id, "request_id": active_request_id,
+            "data": record.to_dict(), "warnings": [], "error": None,
+        })
+
     @app.post("/api/v2/documents/index")
     def document_index_v2(  # pyright: ignore[reportUnusedFunction]
         body: DocumentIndexRequestBody,
@@ -2668,7 +2873,7 @@ def create_app(
         vector_result = index_document_into_vector_rag(
             service=active_embedding_vector_rag_service,
             body=body,
-            trace_id=active_trace_id,
+            trace_id=legacy_trace_id_from_v2(active_trace_id),
             org_id=auth_context.org_id,
             user_id=auth_context.user_id,
         )
