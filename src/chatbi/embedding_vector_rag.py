@@ -133,6 +133,9 @@ class VectorStore(Protocol):
     def upsert_document(self, document: DocumentRecord) -> None:
         ...
 
+    def get_document(self, document_id: str) -> DocumentRecord | None:
+        ...
+
     def upsert_chunks(
         self,
         chunks: tuple[VectorChunk, ...],
@@ -243,6 +246,9 @@ class RetryingVectorStore:
     def upsert_document(self, document: DocumentRecord) -> None:
         self._vector_store.upsert_document(document)
 
+    def get_document(self, document_id: str) -> DocumentRecord | None:
+        return self._vector_store.get_document(document_id)
+
     def upsert_chunks(
         self,
         chunks: tuple[VectorChunk, ...],
@@ -286,6 +292,9 @@ class InMemoryVectorStore:
 
     def upsert_document(self, document: DocumentRecord) -> None:
         self._documents_by_id[document.document_id] = document
+
+    def get_document(self, document_id: str) -> DocumentRecord | None:
+        return self._documents_by_id.get(document_id)
 
     def upsert_chunks(
         self,

@@ -31,6 +31,9 @@ class RuntimeConfig:
     embedding_provider: str = "mock"
     embedding_model: str = "mock-local-embedding"
     service_name: str = "chatbi-api"
+    file_storage_root: str | None = None
+    conversation_context_turns: int = 5
+    file_conversation_context_turns: int = 2
 
     @property
     def postgresql_configured(self) -> bool:
@@ -96,6 +99,19 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         embedding_provider=_non_empty(runtime_env.get("CHATBI_EMBEDDING_PROVIDER")) or "mock",
         embedding_model=_non_empty(runtime_env.get("CHATBI_EMBEDDING_MODEL"))
         or "mock-local-embedding",
+        file_storage_root=_non_empty(runtime_env.get("CHATBI_FILE_STORAGE_ROOT")),
+        conversation_context_turns=_positive_int(
+            runtime_env.get("CHATBI_CONVERSATION_CONTEXT_TURNS"), 5
+        ),
+        # Smaller than conversation_context_turns on purpose: the file branch
+        # (FileDataAgent/FederatedQueryAgent SQL generation) has no way to
+        # tell whether an older turn even touched the same file or a
+        # completely different data source/value format, so it keeps a
+        # tighter window to limit how much unrelated context can bleed into
+        # SQL generation for the current file.
+        file_conversation_context_turns=_positive_int(
+            runtime_env.get("CHATBI_FILE_CONVERSATION_CONTEXT_TURNS"), 2
+        ),
     )
 
 

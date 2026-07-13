@@ -27,34 +27,34 @@
 
 ```mermaid
 flowchart TD
-    subgraph 浏览器端
-        U[用户] -->|选择文件| FU[文件上传 UI]
-        FU -->|multipart POST| API[/api/v2/files/upload]
+    subgraph Browser["浏览器端"]
+        U["用户"] -->|"选择文件"| FU["文件上传 UI"]
+        FU -->|"multipart POST"| API["POST /api/v2/files/upload"]
     end
 
-    subgraph 上传处理管线
-        API --> AV[格式校验 & 病毒扫描]
-        AV --> OBJ[(对象存储\nMinIO / S3)]
-        AV --> META[(files 元数据\nPostgres)]
-        AV --> PARSE{文件类型？}
-        PARSE -->|结构化| SCHEMA[Schema 推断\nDuckDB / Pandas]
-        PARSE -->|非结构化| CHUNK[文本提取 & 切分]
+    subgraph Pipeline["上传处理管线"]
+        API --> AV["格式校验 & 病毒扫描"]
+        AV --> OBJ[("对象存储 MinIO/S3")]
+        AV --> META[("文件元数据 Postgres")]
+        AV --> PARSE{"文件类型?"}
+        PARSE -->|"结构化"| SCHEMA["Schema 推断 DuckDB"]
+        PARSE -->|"非结构化"| CHUNK["文本提取 & 切分"]
         SCHEMA --> META
-        CHUNK --> EMB[向量化服务]
-        EMB --> VEC[(向量存储\npgvector)]
+        CHUNK --> EMB["向量化服务"]
+        EMB --> VEC[("向量存储 pgvector")]
     end
 
-    subgraph 查询时
-        Q[用户问题\n+ file_ids] --> ORCH[编排器]
-        ORCH --> CLASSIFY[问题分类器\n检测 FILE_DATA 意图]
-        CLASSIFY --> FILEAGENT[FileDataAgent\nDuckDB 查询]
-        CLASSIFY --> SQLAGENT[SQL Agent\nPostgres 查询]
-        CLASSIFY --> RAGAGENT[RAG Agent\n向量检索]
-        FILEAGENT --> MERGE[结果合并器]
+    subgraph QueryTime["查询时"]
+        Q["用户问题 + file_ids"] --> ORCH["编排器"]
+        ORCH --> CLASSIFY["问题分类器 FILE_DATA 意图"]
+        CLASSIFY --> FILEAGENT["FileDataAgent DuckDB 查询"]
+        CLASSIFY --> SQLAGENT["SQL Agent Postgres 查询"]
+        CLASSIFY --> RAGAGENT["RAG Agent 向量检索"]
+        FILEAGENT --> MERGE["结果合并器"]
         SQLAGENT --> MERGE
         RAGAGENT --> MERGE
-        MERGE --> LLM[LLM 综合]
-        LLM --> ANS[答案 + 证据]
+        MERGE --> LLM["LLM 综合"]
+        LLM --> ANS["答案 + 证据"]
     end
 
     META --> FILEAGENT
@@ -229,11 +229,11 @@ PDF、DOCX 等文件遵循与现有 RAG 知识文档相同的摄取流程，但�
 
 ```mermaid
 flowchart LR
-    FILE[上传的 PDF / DOCX] --> EXTRACT[文本提取\ntika / pdfminer]
-    EXTRACT --> CLEAN[清洗与规范化]
-    CLEAN --> CHUNK[语义感知切分器\n300–500 tokens，50 token 重叠]
-    CHUNK --> EMB[向量化模型]
-    EMB --> STORE[(pgvector\n含 user_id + file_id 范围过滤)]
+    FILE["上传的 PDF/DOCX"] --> EXTRACT["文本提取 tika/pdfminer"]
+    EXTRACT --> CLEAN["清洗与规范化"]
+    CLEAN --> CHUNK["语义感知切分 300-500 tokens 50-token 重叠"]
+    CHUNK --> EMB["向量化模型"]
+    EMB --> STORE[("pgvector 含 user_id + file_id 范围过滤")]
 ```
 
 检索时，RAG Agent 在向量相似度搜索前应用元数据过滤：`user_id = 当前用户 AND file_id IN 请求中的 file_ids`。
@@ -464,16 +464,16 @@ Response: { file_id, status: "processing" }
 
 ```mermaid
 flowchart TD
-    ORCH[编排器] -->|检测到 FILE_DATA + SQL_QUERY| FED[FederatedQueryAgent]
-    FED --> PG[从 Postgres 执行预查询\n最多物化 200K 行到内存]
-    FED --> FILE[从对象存储加载 Parquet]
-    PG --> DUCK[DuckDB 联邦会话]
+    ORCH["编排器"] -->|"检测到 FILE_DATA + SQL_QUERY"| FED["FederatedQueryAgent"]
+    FED --> PG["从 Postgres 预查询 最多物化 200K 行"]
+    FED --> FILE["从对象存储加载 Parquet"]
+    PG --> DUCK["DuckDB 联邦会话"]
     FILE --> DUCK
-    DUCK --> SCHEMA_CTX[构建联合 Schema 上下文]
-    SCHEMA_CTX --> LLM_SQL[LLM 生成跨源 DuckDB SQL\ndb_{table} JOIN file_{file_id}]
-    LLM_SQL --> GUARD[守护规则校验\n同现有 SQL Guardrail]
-    GUARD --> EXEC[DuckDB 执行]
-    EXEC --> RESULT[TableResult]
+    DUCK --> SCHEMA_CTX["构建联合 Schema 上下文"]
+    SCHEMA_CTX --> LLM_SQL["LLM 生成跨源 DuckDB SQL db_table JOIN file_id"]
+    LLM_SQL --> GUARD["守护规则校验 同现有 SQL Guardrail"]
+    GUARD --> EXEC["DuckDB 执行"]
+    EXEC --> RESULT["TableResult"]
 ```
 
 **DuckDB 会话内的命名规范**：
@@ -574,3 +574,7 @@ WHERE file_id = 'ufile_abc123';
 | 大文件上传 | 客户端分片直传对象存储 + 流式后处理 | 按角色分级限额；流式保证 UI 响应 |
 | 跨源 JOIN | FederatedQueryAgent + DuckDB 联邦会话 | Postgres 物化上限 200K 行；超出降级 |
 | 知识库提升 | 管理员一键提升 + 向量存储复制 + 双向可追溯 | 提升与原文件生命周期解耦 |
+
+## 13. 后续设计
+
+实现完成后的复盘评审中，发现 RAG 知识库存在一个真实的跨租户数据泄露问题，也进一步完善了分享/保留模型。详见 [10-followups/](10-followups/README.zh-CN.md)：RAG 按用户隔离的修复方案、修正后的管理员审批分享流程、保留与自动归档的重新设计，以及多轮对话记忆设计。

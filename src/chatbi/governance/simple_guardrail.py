@@ -22,7 +22,7 @@ from chatbi.governance.policies import SqlObjectAccessPolicy
 from chatbi.governance.settings import GuardrailSettings
 from chatbi.governance.sql_parser import SqlReferenceParser
 from chatbi.governance.sql_rewriter import RowLimitRewriter
-from chatbi.governance.sql_validator import SqlStatementValidator
+from chatbi.governance.sql_validator import SqlValidationResult, SqlValidationViolationCode, SqlStatementValidator
 from chatbi.governance.timeout_policy import QueryTimeoutPolicy
 
 
@@ -60,7 +60,7 @@ class SimpleSqlGuardrail:
     def check(self, sql_text: str, request: QueryRequest, trace_id: str) -> GuardrailResult:
         validation = self._statement_validator.validate(sql_text)
         if not validation.passed:
-            result = self._deny(trace_id, validation.message or "SQL was denied.")
+            result = self._deny_for_violation(trace_id, validation)
             return self._record_decision(sql_text, request, result)
 
         normalized_sql = validation.normalized_sql
@@ -91,12 +91,24 @@ class SimpleSqlGuardrail:
             return None
         return self._record_decision(sql_text, request, result)
 
-    def _deny(self, trace_id: str, message: str) -> GuardrailResult:
+    def _deny_for_violation(
+        self, trace_id: str, validation: SqlValidationResult
+    ) -> GuardrailResult:
+        # 10-followups/13: UNRECOGNIZED_QUERY_OUTPUT means the model's output
+        # contained no dangerous DML/DDL keyword at all — it just wasn't a
+        # recognizable read-only query. Every other violation code (a real
+        # dangerous-statement match, an empty/multi-statement/structural-risk
+        # input) keeps the original SQL_DENY_STATEMENT code.
+        error_code = (
+            ErrorCode.SQL_DENY_UNRECOGNIZED_OUTPUT
+            if validation.violation_code is SqlValidationViolationCode.UNRECOGNIZED_QUERY_OUTPUT
+            else ErrorCode.SQL_DENY_STATEMENT
+        )
         return GuardrailResult(
             decision=GuardrailDecision.DENY,
             trace_id=trace_id,
-            error_code=ErrorCode.SQL_DENY_STATEMENT,
-            message=message,
+            error_code=error_code,
+            message=validation.message or "SQL was denied.",
         )
 
     def _deny_object(self, trace_id: str, message: str) -> GuardrailResult:

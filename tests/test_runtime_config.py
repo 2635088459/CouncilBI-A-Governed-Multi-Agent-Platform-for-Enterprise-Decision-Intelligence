@@ -82,6 +82,55 @@ def test_load_runtime_config_reads_required_deployment_urls() -> None:
     assert config.vector_store_configured is True
 
 
+def test_load_runtime_config_reads_file_storage_root() -> None:
+    config = load_runtime_config({"CHATBI_FILE_STORAGE_ROOT": "/data/file_storage"})
+
+    assert config.file_storage_root == "/data/file_storage"
+
+
+def test_load_runtime_config_defaults_file_storage_root_to_none() -> None:
+    config = load_runtime_config({})
+
+    assert config.file_storage_root is None
+
+
+def test_load_runtime_config_reads_conversation_context_turns() -> None:
+    # Spec FV10.4 §6.3 / FR-FV10-053
+    config = load_runtime_config({"CHATBI_CONVERSATION_CONTEXT_TURNS": "8"})
+
+    assert config.conversation_context_turns == 8
+
+
+def test_load_runtime_config_defaults_conversation_context_turns_to_5() -> None:
+    config = load_runtime_config({})
+
+    assert config.conversation_context_turns == 5
+
+
+def test_load_runtime_config_ignores_invalid_conversation_context_turns() -> None:
+    config = load_runtime_config({"CHATBI_CONVERSATION_CONTEXT_TURNS": "-3"})
+
+    assert config.conversation_context_turns == 5
+
+
+def test_load_runtime_config_reads_file_conversation_context_turns() -> None:
+    config = load_runtime_config({"CHATBI_FILE_CONVERSATION_CONTEXT_TURNS": "4"})
+
+    assert config.file_conversation_context_turns == 4
+
+
+def test_load_runtime_config_defaults_file_conversation_context_turns_to_2() -> None:
+    config = load_runtime_config({})
+
+    assert config.file_conversation_context_turns == 2
+
+
+def test_load_runtime_config_ignores_invalid_file_conversation_context_turns() -> None:
+    config = load_runtime_config({"CHATBI_FILE_CONVERSATION_CONTEXT_TURNS": "-3"})
+
+    assert config.file_conversation_context_turns == 2
+
+
 def test_runtime_config_treats_blank_values_as_missing() -> None:
     config = load_runtime_config(
         {

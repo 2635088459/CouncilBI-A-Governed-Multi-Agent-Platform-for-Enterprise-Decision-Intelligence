@@ -32,6 +32,9 @@ services:
       CHATBI_EMBEDDING_MODEL: ${CHATBI_EMBEDDING_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      CHATBI_FILE_STORAGE_ROOT: /data/file_storage
+    volumes:
+      - chatbi_file_storage:/data/file_storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -110,3 +113,4 @@ services:
 
 volumes:
   chatbi_postgres_data:
+  chatbi_file_storage:

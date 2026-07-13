@@ -44,11 +44,28 @@ class GroundedAnswerSynthesizer:
         user_id: str,
         org_id: str,
         trace_id: str,
+        conversation_context: tuple[Mapping[str, str], ...] = (),
+        extra_instructions: str | None = None,
     ) -> AnswerSynthesisResult:
         if self._llm_client is None:
             return AnswerSynthesisResult(
-                answer_text=self._fallback_answer(question, safe_sql, table_result, evidence_list)
+                answer_text=self._fallback_answer(
+                    question, safe_sql, table_result, evidence_list, extra_instructions
+                )
             )
+
+        system_content = (
+            "You are a governed enterprise ChatBI analyst. Answer only from the "
+            "provided SQL result rows and evidence snippets. If the context is "
+            "insufficient, say what is missing. Cite evidence anchors when useful. "
+            "Prior turns in this conversation (if any) may precede this message — "
+            "read them to resolve pronouns or references in the current question."
+        )
+        if extra_instructions:
+            # 10-followups/12: a caller-supplied caveat (e.g. a federated
+            # JOIN that matched zero rows despite non-empty sources) that
+            # must shape this answer beyond what the SQL rows alone convey.
+            system_content = f"{system_content}\n\n{extra_instructions}"
 
         request = LLMRequest(
             task_type="answer_synthesis",
@@ -56,12 +73,12 @@ class GroundedAnswerSynthesizer:
             messages=(
                 {
                     "role": "system",
-                    "content": (
-                        "You are a governed enterprise ChatBI analyst. Answer only from the "
-                        "provided SQL result rows and evidence snippets. If the context is "
-                        "insufficient, say what is missing. Cite evidence anchors when useful."
-                    ),
+                    "content": system_content,
                 },
+                # FR-FV10-052/056: the last N turns, prepended verbatim as
+                # ordinary chat messages — this *is* the follow-up-resolution
+                # mechanism, there is no separate rewrite call.
+                *conversation_context,
                 {
                     "role": "user",
                     "content": json.dumps(
@@ -104,7 +121,9 @@ class GroundedAnswerSynthesizer:
             response = self._llm_client.complete(request)
         except LLMTimeoutError:
             return AnswerSynthesisResult(
-                answer_text=self._fallback_answer(question, safe_sql, table_result, evidence_list),
+                answer_text=self._fallback_answer(
+                    question, safe_sql, table_result, evidence_list, extra_instructions
+                ),
                 warnings=(
                     WarningMessage(
                         code=ErrorCode.LLM_PROVIDER_TIMEOUT,
@@ -114,7 +133,9 @@ class GroundedAnswerSynthesizer:
             )
         except LLMProviderError:
             return AnswerSynthesisResult(
-                answer_text=self._fallback_answer(question, safe_sql, table_result, evidence_list),
+                answer_text=self._fallback_answer(
+                    question, safe_sql, table_result, evidence_list, extra_instructions
+                ),
                 warnings=(
                     WarningMessage(
                         code=ErrorCode.LLM_PROVIDER_FAILURE,
@@ -125,7 +146,9 @@ class GroundedAnswerSynthesizer:
 
         text = response.text.strip()
         if not text:
-            text = self._fallback_answer(question, safe_sql, table_result, evidence_list)
+            text = self._fallback_answer(
+                question, safe_sql, table_result, evidence_list, extra_instructions
+            )
         return AnswerSynthesisResult(answer_text=text)
 
     def _fallback_answer(
@@ -134,7 +157,19 @@ class GroundedAnswerSynthesizer:
         safe_sql: str,
         table_result: TableResult,
         evidence_list: tuple[EvidenceItem, ...],
+        extra_instructions: str | None = None,
     ) -> str:
+        if extra_instructions and not table_result.rows:
+            # 10-followups/12: the deterministic (no-LLM / LLM-failed)
+            # fallback must not fall through to a generic "ready" message
+            # that reads as a confirmed result when the caller has flagged
+            # this empty table as a join-key mismatch, not a real answer.
+            return (
+                "No matching records were found across the join key(s) between "
+                "your file and the warehouse table — this does not confirm any "
+                "threshold or comparison result. Verify that the shared column(s) "
+                "use the same values/format in both sources."
+            )
         normalized = f"{question} {safe_sql}".lower()
         if self._is_support_ticket_table(table_result):
             return self._support_ticket_fallback(table_result, evidence_list)

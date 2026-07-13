@@ -21,6 +21,14 @@ _RISKY_FUNCTION_PATTERN = re.compile(
     r"\b(sleep|benchmark|load_file|xp_cmdshell)\s*\(",
     re.IGNORECASE,
 )
+# A `WITH ... AS (...) SELECT ...` common table expression is a single
+# read-only statement, not a write, and is common enough in real analytical
+# SQL (period-over-period comparisons, running totals) that rejecting it
+# outright pushed the LLM-generation fallback in simple_orchestrator.py
+# toward reformulating perfectly valid CTEs as flatter queries or, worse,
+# non-SQL prose. Still denied regardless of prefix: any statement matching
+# _DANGEROUS_STATEMENT_PATTERN or _has_structural_risk below.
+_ALLOWED_STATEMENT_PREFIXES = ("select ", "with ")
 
 
 class SqlValidationViolationCode(StrEnum):
@@ -28,6 +36,12 @@ class SqlValidationViolationCode(StrEnum):
     MULTIPLE_STATEMENTS = "multiple_statements"
     STRUCTURAL_RISK = "structural_risk"
     NON_SELECT_STATEMENT = "non_select_statement"
+    # 10-followups/13: distinct from NON_SELECT_STATEMENT — no dangerous
+    # DML/DDL keyword was found at all, so this is not a write attempt. The
+    # model's output simply wasn't recognizable as a single read-only query
+    # (e.g. prose, a refusal, an explanation) — most often because the
+    # question asked about a metric/table the schema doesn't have.
+    UNRECOGNIZED_QUERY_OUTPUT = "unrecognized_query_output"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,11 +91,11 @@ class SqlStatementValidator:
                 "Only SELECT statements are allowed.",
             )
 
-        if not normalized_sql.lower().startswith("select "):
+        if not normalized_sql.lower().startswith(_ALLOWED_STATEMENT_PREFIXES):
             return self._deny(
                 normalized_sql,
-                SqlValidationViolationCode.NON_SELECT_STATEMENT,
-                "Only SELECT statements are allowed.",
+                SqlValidationViolationCode.UNRECOGNIZED_QUERY_OUTPUT,
+                "The model's output was not a single read-only query.",
             )
 
         return SqlValidationResult(normalized_sql=normalized_sql)

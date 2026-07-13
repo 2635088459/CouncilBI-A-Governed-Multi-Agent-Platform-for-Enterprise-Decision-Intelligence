@@ -1,4 +1,4 @@
-# Spec FV-10：用户文件上传与混合数据分析
+11# Spec FV-10：用户文件上传与混合数据分析
 
 来源设计文档：
 - [用户文件上传与混合分析设计](../../../system_design/final-version/zh-CN/10-user-file-upload-and-hybrid-analysis.zh-CN.md)
@@ -586,3 +586,9 @@ src/chatbi/agents/file_data_agent.py
 src/chatbi/agents/federated_query_agent.py
 src/chatbi/orchestration/result_merger.py    # 扩展支持文件数据源标注
 ```
+
+---
+
+## 11. 后续 Spec
+
+实现完成后的复盘评审中，发现 RAG 知识库存在跨租户数据泄露问题，也进一步完善了分享/保留模型。详见 [10-followups/](10-followups/README.zh-CN.md)：Spec FV10.1（RAG 按用户隔离，FR-FV10-037–040）、Spec FV10.2（文件分享审批流程，FR-FV10-041–044）、Spec FV10.3（保留与自动归档，FR-FV10-045–050）、Spec FV10.4（多轮对话记忆，FR-FV10-051–056）。

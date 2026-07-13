@@ -19,6 +19,14 @@ _TABLE_REFERENCE_PATTERN = re.compile(
 _QUALIFIED_COLUMN_PATTERN = re.compile(
     r"\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b"
 )
+# A `WITH name AS (...)` common table expression's name is a query-local
+# alias, not a real schema object — it would otherwise show up in a later
+# `FROM name` as an unrecognized "table" and fail the allow-list check for
+# every role, defeating the point of allowing CTEs through the statement
+# validator at all. Matches only "<identifier> AS (" (an opening paren
+# immediately after AS), which a real subquery's "(...) AS alias" (no
+# following paren) and a plain column alias never produce.
+_CTE_NAME_PATTERN = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +43,8 @@ class SqlReferenceParser:
 
     def parse(self, sql_text: str) -> SqlReferenceSet:
         normalized_sql = self._normalize(sql_text)
-        table_aliases = self._extract_table_aliases(normalized_sql)
+        cte_names = self._extract_cte_names(normalized_sql)
+        table_aliases = self._extract_table_aliases(normalized_sql, cte_names)
         field_names = self._extract_referenced_fields(normalized_sql, table_aliases)
         return SqlReferenceSet(
             table_aliases=table_aliases,
@@ -43,10 +52,18 @@ class SqlReferenceParser:
             field_names=field_names,
         )
 
-    def _extract_table_aliases(self, sql_text: str) -> dict[str, str]:
+    def _extract_cte_names(self, sql_text: str) -> frozenset[str]:
+        return frozenset(
+            self._normalize_identifier(match.group(1))
+            for match in _CTE_NAME_PATTERN.finditer(sql_text)
+        )
+
+    def _extract_table_aliases(self, sql_text: str, cte_names: frozenset[str] = frozenset()) -> dict[str, str]:
         aliases: dict[str, str] = {}
         for match in _TABLE_REFERENCE_PATTERN.finditer(sql_text):
             table_name = self._normalize_identifier(match.group(2))
+            if table_name in cte_names:
+                continue
             alias = match.group(3)
             aliases[table_name] = table_name
             if alias is not None:

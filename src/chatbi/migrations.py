@@ -376,8 +376,13 @@ CREATE TABLE IF NOT EXISTS knowledge.documents (
     doc_type TEXT NOT NULL,
     publish_time TIMESTAMPTZ NOT NULL,
     business_tags TEXT[] NOT NULL DEFAULT '{}',
-    allowed_roles TEXT[] NOT NULL DEFAULT '{}'
+    allowed_roles TEXT[] NOT NULL DEFAULT '{}',
+    owner_user_id TEXT
 );
+ALTER TABLE knowledge.documents
+    ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_owner
+    ON knowledge.documents(owner_user_id) WHERE owner_user_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS knowledge.doc_chunks (
     chunk_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES knowledge.documents(source_id),
@@ -465,9 +470,8 @@ VALUES (
     'Revenue is calculated from paid orders only. A month-over-month spike should be explained with campaign, refund, and region context.',
     '{"fixture": "rag", "metric": "revenue"}'::jsonb
 )
-ON CONFLICT (chunk_id) DO UPDATE SET
-    source_id = EXCLUDED.source_id,
-    chunk_index = EXCLUDED.chunk_index,
+ON CONFLICT (source_id, chunk_index) DO UPDATE SET
+    chunk_id = EXCLUDED.chunk_id,
     chunk_text = EXCLUDED.chunk_text,
     metadata = EXCLUDED.metadata;
 
@@ -485,9 +489,8 @@ VALUES (
     'Support ticket volume increased for Governed Analytics after the enterprise workspace rollout. High-severity cases were prioritized and average resolution time improved in June.',
     '{"fixture": "rag", "domain": "support"}'::jsonb
 )
-ON CONFLICT (chunk_id) DO UPDATE SET
-    source_id = EXCLUDED.source_id,
-    chunk_index = EXCLUDED.chunk_index,
+ON CONFLICT (source_id, chunk_index) DO UPDATE SET
+    chunk_id = EXCLUDED.chunk_id,
     chunk_text = EXCLUDED.chunk_text,
     metadata = EXCLUDED.metadata;
 

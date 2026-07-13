@@ -32,6 +32,7 @@ class AgentName(StrEnum):
     ANALYTICS = "analytics_agent"
     RAG = "rag_agent"
     VERIFIER = "verifier_agent"
+    FILE_DATA = "file_data_agent"
 
 
 class AgentStepStatus(StrEnum):
@@ -57,6 +58,11 @@ class TraceLinkedRecordType(StrEnum):
 
 class ErrorCode(StrEnum):
     SQL_DENY_STATEMENT = "SQL_DENY_STATEMENT"
+    # 10-followups/13: distinct from SQL_DENY_STATEMENT — the model's output
+    # contained no dangerous DML/DDL keyword; it just wasn't a recognizable
+    # read-only query. Kept separate so the API layer and frontend can stop
+    # describing this as a data-modification attempt.
+    SQL_DENY_UNRECOGNIZED_OUTPUT = "SQL_DENY_UNRECOGNIZED_OUTPUT"
     SQL_DENY_OBJECT = "SQL_DENY_OBJECT"
     SQL_DENY_FUNCTION = "SQL_DENY_FUNCTION"
     SQL_DENY_TIMEOUT = "SQL_DENY_TIMEOUT"

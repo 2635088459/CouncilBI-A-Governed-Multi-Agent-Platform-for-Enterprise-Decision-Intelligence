@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from chatbi.api.models import (
+    ApiErrorCode,
     EvalRunResultPayload,
     ChatQueryRequestPayload,
+    api_error_for_warning,
     observability_span_payload,
     quality_dashboard_payload,
     success_envelope,
@@ -140,6 +144,30 @@ def test_success_envelope_preserves_warnings() -> None:
 
     assert envelope.warnings == (warning,)
     assert envelope.trace_id == answer.trace_id
+
+
+# 10-followups/13 (Spec FV10.13 §8.3, TC-FV10-212/213): SQL_DENY_UNRECOGNIZED_OUTPUT
+# must map to a distinct ApiErrorCode, and the three pre-existing guardrail
+# denial codes must keep mapping to SQL_GUARDRAIL_BLOCKED unchanged.
+def test_api_error_for_warning_maps_unrecognized_output_to_sql_not_queryable() -> None:
+    warning = WarningMessage(
+        code=ErrorCode.SQL_DENY_UNRECOGNIZED_OUTPUT,
+        message="The model's output was not a single read-only query.",
+    )
+
+    assert api_error_for_warning(warning) is ApiErrorCode.SQL_NOT_QUERYABLE
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    (ErrorCode.SQL_DENY_STATEMENT, ErrorCode.SQL_DENY_OBJECT, ErrorCode.SQL_DENY_FUNCTION),
+)
+def test_api_error_for_warning_still_maps_guardrail_denials_to_sql_guardrail_blocked(
+    error_code: ErrorCode,
+) -> None:
+    warning = WarningMessage(code=error_code, message="denied")
+
+    assert api_error_for_warning(warning) is ApiErrorCode.SQL_GUARDRAIL_BLOCKED
 
 
 def test_observability_span_payload_is_json_friendly() -> None:

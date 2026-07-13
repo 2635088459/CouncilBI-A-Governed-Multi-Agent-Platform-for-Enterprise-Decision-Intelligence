@@ -29,6 +29,7 @@ class AgentStepName(StrEnum):
     ANALYTICS = "analytics"
     RAG = "rag"
     VERIFIER = "verifier"
+    FILE_DATA = "file_data"
 
 
 class AgentStepOutputStatus(StrEnum):

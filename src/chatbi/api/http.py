@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import asyncio
 import os
+import tempfile
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import datetime
-from typing import Any, Callable, Mapping, Sequence, cast
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, AsyncGenerator, Callable, Mapping, Sequence, cast
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, Request
+import duckdb
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -23,6 +28,7 @@ from chatbi.analytics import (
     result_to_dict,
 )
 from chatbi.analytics_repository import InMemoryAnalyticsRepository
+from chatbi.answer_synthesis import GroundedAnswerSynthesizer
 from chatbi.api.models import (
     ApiEnvelope,
     ApiErrorCode,
@@ -30,6 +36,17 @@ from chatbi.api.models import (
     EvalRunRequestPayload,
     envelope,
     error_envelope,
+)
+from chatbi.agents import (
+    FederatedQueryAgent,
+    FileDataAgent,
+    FileNotReadyError,
+    FileOwnershipError,
+    FileScopedRetriever,
+    ReadOnlyBusinessRowSource,
+    question_references_any_attached_file,
+    question_references_attached_file,
+    split_file_ids_by_type,
 )
 from chatbi.auth import (
     AuthContext,
@@ -46,7 +63,18 @@ from chatbi.auth import (
     require_permission,
 )
 from chatbi.application.app import ChatBIApplication
-from chatbi.core.contracts import Locale, QueryRequest, UserRole, new_trace_id
+from chatbi.core.contracts import (
+    ErrorCode,
+    EvidenceItem,
+    Locale,
+    QueryAnswer,
+    QueryHistoryRecord,
+    QueryRequest,
+    TableResult,
+    UserRole,
+    WarningMessage,
+    new_trace_id,
+)
 from chatbi.core.runtime_config import (
     DatabaseReadinessChecker,
     RedisReadinessChecker,
@@ -55,7 +83,67 @@ from chatbi.core.runtime_config import (
     load_runtime_config,
 )
 from chatbi.embedding_vector_config import build_embedding_vector_rag_service_from_runtime_config
-from chatbi.embedding_vector_rag import DocumentRecord, EmbeddingVectorRagService
+from chatbi.embedding_vector_rag import (
+    DocumentRecord,
+    EmbeddingVectorRagService,
+    InMemoryVectorStore,
+    MockEmbeddingClient,
+)
+from chatbi.files import (
+    DEFAULT_CHUNK_SIZE_BYTES,
+    MAX_UPLOAD_SESSION_TTL,
+    ChunkUploadSession,
+    ChunkUploadSessionStore,
+    DocumentNotPromotedError,
+    FederatedQueryAgentInput,
+    FileAccessChecker,
+    FileAccessDecision,
+    FileDataAgentInput,
+    FileFormatCheckResult,
+    FileFormatValidator,
+    FileNotPromotableError,
+    FileNotShareableError,
+    FileProcessingWorker,
+    FileRepository,
+    FileShareApprovalService,
+    FileShareRecord,
+    FileShareRequest,
+    FileSizeCheckResult,
+    FileSizeEnforcer,
+    FileVectorSink,
+    FileVectorSource,
+    FileVersionManager,
+    InMemoryChunkUploadSessionStore,
+    InMemoryFileRepository,
+    InMemoryFileVectorSink,
+    InMemoryObjectStorageAdapter,
+    KnowledgePromotionService,
+    LocalDiskObjectStorageAdapter,
+    MimeCheckResult,
+    MimeMagicChecker,
+    NotAuthorizedToPromoteError,
+    NotFileOwnerError,
+    ObjectNotFoundError,
+    ObjectStorageAdapter,
+    PendingShareRequestExistsError,
+    PostgresFileRepository,
+    RetentionWorker,
+    ShareRequestNotFoundError,
+    ShareRequestNotPendingError,
+    StorageQuotaCheckResult,
+    StorageQuotaEnforcer,
+    UserUploadedFile,
+    build_storage_key,
+    chunk_staging_key,
+    compute_chunk_count,
+    file_share_visibility_resolver,
+    new_share_id,
+    new_upload_id,
+    parquet_storage_key,
+    postgres_file_repository_from_psycopg,
+    purge_duplicate_archived_file,
+    sanitize_filename,
+)
 from chatbi.core.architecture_contracts import (
     AnswerPayloadV2,
     ChatQueryResponseV2,
@@ -77,6 +165,11 @@ from chatbi.history.query_results import (
     RuntimeQueryResultStore,
     postgres_runtime_query_result_store_from_psycopg,
 )
+from chatbi.history.in_memory import conversation_messages
+from chatbi.history.session_file_context import (
+    InMemorySessionFileContext,
+    resolve_effective_file_ids,
+)
 from chatbi.governance import (
     GuardrailAuditLogV2,
     GuardrailDecisionV2,
@@ -88,15 +181,18 @@ from chatbi.governance import (
     postgres_guardrail_audit_log_v2_from_psycopg,
 )
 from chatbi.observability_logs import LogLevel, ObservabilityLogger
+from chatbi.governance.business_table_catalog import BusinessTableCatalog, resolve_federated_pg_context
 from chatbi.governance.query_audit import QueryAuditLog, QueryAuditRecord
-from chatbi.llm import build_llm_client_from_runtime_config
+from chatbi.llm import LLMClient, build_llm_client_from_runtime_config
 from chatbi.knowledge import (
     ChunkEmbedding,
     DocumentChunk,
     InMemoryKnowledgeStore,
     KnowledgeDocument,
+    RetrievalQuery,
     text_embedding,
 )
+from chatbi.orchestration import AnalyticsServiceRunner, QuestionClassifier, ResultMerger, TaskType
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.orchestration.worker import (
     AsyncTaskKind,
@@ -168,6 +264,36 @@ class RefreshTokenRequestBody(BaseModel):
 
 class RoleUpdateRequestBody(BaseModel):
     roles: tuple[str, ...]
+
+
+class FileUploadInitRequestBody(BaseModel):
+    original_name: str
+    file_size_bytes: int
+    mime_type: str
+    scope: str = "session"
+    session_id: str | None = None
+    description: str | None = None
+
+
+class ChunkEtagBody(BaseModel):
+    chunk_index: int
+    etag: str
+
+
+class FileUploadCompleteRequestBody(BaseModel):
+    etags: tuple[ChunkEtagBody, ...] = ()
+
+
+class FileShareRequestBody(BaseModel):
+    granted_to: str
+
+
+class ShareRequestRejectBody(BaseModel):
+    reason: str | None = None
+
+
+class PromoteFileRequestBody(BaseModel):
+    file_id: str
 
 
 class AnalyticsOptionsBody(BaseModel):
@@ -377,6 +503,8 @@ def status_code_for_envelope(envelope: ApiEnvelope) -> int:
         return 403
     if envelope.code is ApiErrorCode.SQL_GUARDRAIL_BLOCKED:
         return 403
+    if envelope.code is ApiErrorCode.SQL_NOT_QUERYABLE:
+        return 400
     return 200
 
 
@@ -450,6 +578,20 @@ def _build_default_guardrail_audit_log_v2(
     return store
 
 
+def _build_default_file_repository(
+    runtime_config: RuntimeConfig,
+    connect: Callable[[str], Any] | None,
+    use_postgres_metadata: bool,
+) -> FileRepository:
+    if use_postgres_metadata and runtime_config.database_url:
+        repository: PostgresFileRepository = postgres_file_repository_from_psycopg(
+            (connect or connect_psycopg)(runtime_config.database_url)
+        )
+        repository.initialize_schema()
+        return repository
+    return InMemoryFileRepository()
+
+
 def _build_default_runtime_query_result_store(
     runtime_config: RuntimeConfig,
     connect: Callable[[str], Any] | None,
@@ -474,11 +616,11 @@ def _load_knowledge_store_from_db(
         conn = connect_fn(database_url)
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT source_id, title, doc_type, publish_time, business_tags, allowed_roles"
+                "SELECT source_id, title, doc_type, publish_time, business_tags, allowed_roles, owner_user_id"
                 " FROM knowledge.documents"
             )
             for row in cur.fetchall():
-                source_id, title, doc_type, publish_time, business_tags, allowed_roles = row
+                source_id, title, doc_type, publish_time, business_tags, allowed_roles, owner_user_id = row
                 store.save_document(
                     KnowledgeDocument(
                         source_id=source_id,
@@ -487,6 +629,7 @@ def _load_knowledge_store_from_db(
                         publish_time=publish_time,
                         tags=tuple(business_tags or []),
                         allowed_roles=tuple(allowed_roles or []),
+                        owner_user_id=owner_user_id,
                     )
                 )
             cur.execute(
@@ -532,6 +675,7 @@ def _build_default_chatbi_application(
             orchestrator=SimpleOrchestrator(
                 llm_client=llm_client,
                 knowledge_store=knowledge_store,
+                conversation_context_turns=runtime_config.conversation_context_turns,
             )
         )
 
@@ -543,6 +687,7 @@ def _build_default_chatbi_application(
                 readonly_query_connect or connect_psycopg,
             ),
             readonly_database_url=runtime_config.readonly_database_url,
+            conversation_context_turns=runtime_config.conversation_context_turns,
         )
     )
 
@@ -665,7 +810,10 @@ def runtime_query_result_record_from_response(
     sql_text = data_mapping.get("sql_text")
     table_result = data_mapping.get("table_result")
     chart_spec = data_mapping.get("chart_spec")
-    if not isinstance(sql_text, str):
+    # A document-only answer (Spec FV10.5) has no SQL to replay — this store
+    # exists specifically for SQL-result replay, so there is nothing to
+    # persist here, not an error; the caller already treats None as "skip".
+    if not isinstance(sql_text, str) or not sql_text.strip():
         return None
 
     table_result_mapping = _mapping_for_runtime_json(table_result)
@@ -1236,6 +1384,7 @@ def _v2_answer_payload(data: Mapping[str, Any] | None) -> AnswerPayloadV2 | None
     if data is None:
         return None
 
+    table_result_source = data.get("table_result_source")
     return {
         "answer_text": str(data.get("answer_text", "")),
         "table_result": _v2_table_result(data.get("table_result")),
@@ -1250,6 +1399,13 @@ def _v2_answer_payload(data: Mapping[str, Any] | None) -> AnswerPayloadV2 | None
             if isinstance(item, Mapping)
         ],
         "confidence": float(data.get("confidence", 0.0)),
+        "table_result_source": str(table_result_source) if table_result_source else None,
+        "guardrail_blocked": bool(data.get("guardrail_blocked", False)),
+        "analytics_result": (
+            _json_safe_mapping(cast(Mapping[str, Any], data.get("analytics_result")))
+            if isinstance(data.get("analytics_result"), Mapping)
+            else None
+        ),
     }
 
 
@@ -1266,6 +1422,62 @@ def _v2_table_result(value: object) -> TableResultV2 | None:
         "columns": [str(column) for column in _v2_iterable(getattr(value, "columns", ()))],
         "rows": [_v2_row(row) for row in _v2_iterable(getattr(value, "rows", ()))],
     }
+
+
+_ANALYTICS_TIME_COLUMN_HINTS = ("month", "date", "time", "period", "day", "year", "week")
+
+# 10-followups/12 (Spec FV10.12 §6.1, revised per §10): the minimum
+# InMemoryKnowledgeStore relevance_score a knowledge-base evidence item must
+# clear before being attached to a hybrid file/warehouse answer's
+# evidence_payload ("Sources"). Scoped to _handle_file_data_chat_query only.
+#
+# 0.35 (this spec's originally proposed value) was measured, during
+# implementation, to exclude a genuinely on-topic document already covered
+# by an existing regression test (score 0.2267) while *admitting*
+# reconstructions of the originally reported bug's own unrelated documents
+# (0.3502 and 0.4011) — this store's keyword+hashed-embedding scoring
+# rewards a document's vocabulary breadth more than its topical relevance,
+# so a short, precisely on-topic snippet can score lower than a long,
+# generically related but off-topic one. No fixed floor can satisfy both
+# constraints at once; 0.15 is chosen to preserve the passing regression
+# test while still excluding near-zero, essentially-unrelated matches. It is
+# not expected to reliably exclude a reconstruction of the original
+# report's own documents — see this spec's §10 and the source design's §6.
+_MIN_KNOWLEDGE_BASE_RELEVANCE_SCORE = 0.15
+
+
+def _infer_time_value_columns(table_result: TableResult) -> tuple[str, str] | None:
+    """Best-effort: which column is the time axis, which is the metric.
+
+    FileDataAgent/FederatedQueryAgent tables have no declared time/value
+    role the way a resolved semantic metric does, so this is a heuristic:
+    first column whose name looks like a time bucket, then the first
+    remaining numeric column. Returns None when either guess fails, so the
+    caller skips analytics instead of feeding AnalyticsService garbage.
+    """
+
+    if not table_result.rows:
+        return None
+    sample = table_result.rows[0]
+    time_column = next(
+        (column for column in table_result.columns if column.lower() in _ANALYTICS_TIME_COLUMN_HINTS),
+        None,
+    )
+    if time_column is None:
+        return None
+    value_column = next(
+        (
+            column
+            for column in table_result.columns
+            if column != time_column
+            and isinstance(sample.get(column), (int, float))
+            and not isinstance(sample.get(column), bool)
+        ),
+        None,
+    )
+    if value_column is None:
+        return None
+    return time_column, value_column
 
 
 def _v2_mapping_or_none(value: object) -> dict[str, Any] | None:
@@ -1415,6 +1627,23 @@ def require_headers(
     return active_trace_id, None
 
 
+async def _run_retention_sweep_loop(worker: RetentionWorker, interval_seconds: float) -> None:
+    """FR-FV10-050: actually invoke RetentionWorker.run() on a schedule.
+
+    Runs the sweep immediately (so a fresh process doesn't wait a full
+    interval for its first pass), then repeats. A single in-process
+    ``asyncio`` loop is deliberately not a distributed job queue — see the
+    source design's §7 scoping note.
+    """
+
+    while True:
+        try:
+            worker.run()
+        except Exception:
+            pass  # a transient failure must not kill the schedule itself
+        await asyncio.sleep(interval_seconds)
+
+
 # Route registration is intentionally thin: validate HTTP concerns, call the
 # application facade, then serialize one ApiEnvelope back to the client.
 def create_app(
@@ -1437,6 +1666,15 @@ def create_app(
     analytics_service: AnalyticsService | None = None,
     auth_service: AuthService | None = None,
     embedding_vector_rag_service: EmbeddingVectorRagService | None = None,
+    file_repository: FileRepository | None = None,
+    file_repository_connect: Callable[[str], Any] | None = None,
+    object_storage_adapter: ObjectStorageAdapter | None = None,
+    file_vector_sink: FileVectorSink | None = None,
+    chunk_upload_session_store: ChunkUploadSessionStore | None = None,
+    file_query_llm_client: LLMClient | None = None,
+    business_table_catalog: BusinessTableCatalog | None = None,
+    federated_query_agent: FederatedQueryAgent | None = None,
+    retention_sweep_interval_seconds: float = 86400.0,
 ) -> FastAPI:
     active_runtime_config = runtime_config or load_runtime_config()
     chatbi_application = application or _build_default_chatbi_application(
@@ -1482,6 +1720,117 @@ def create_app(
         runtime_config=active_runtime_config,
         connect=auth_connect,
         use_postgres_metadata=use_postgres_metadata,
+    )
+    active_file_repository = file_repository or _build_default_file_repository(
+        runtime_config=active_runtime_config,
+        connect=file_repository_connect,
+        use_postgres_metadata=use_postgres_metadata,
+    )
+    active_object_storage_adapter = object_storage_adapter or (
+        LocalDiskObjectStorageAdapter(Path(active_runtime_config.file_storage_root))
+        if active_runtime_config.file_storage_root
+        else InMemoryObjectStorageAdapter()
+    )
+    active_file_vector_sink: FileVectorSink = file_vector_sink or InMemoryFileVectorSink()
+    active_file_vector_source = cast(FileVectorSource, active_file_vector_sink)
+    active_chunk_upload_session_store = (
+        chunk_upload_session_store or InMemoryChunkUploadSessionStore()
+    )
+    file_access_checker = FileAccessChecker()
+    file_version_manager = FileVersionManager()
+    file_processing_worker = FileProcessingWorker(
+        storage=active_object_storage_adapter,
+        repository=active_file_repository,
+        embedding_client=MockEmbeddingClient(),
+        vector_sink=active_file_vector_sink,
+    )
+    active_knowledge_vector_store = (
+        active_embedding_vector_rag_service.vector_store
+        if active_embedding_vector_rag_service is not None
+        else InMemoryVectorStore()
+    )
+    # Promotion must also reach the InMemoryKnowledgeStore that RagAgentRunner
+    # actually queries at chat time (see _load_knowledge_store_from_db) —
+    # writing only to active_knowledge_vector_store above leaves a promoted
+    # file invisible to real RAG answers until the next process restart.
+    knowledge_promotion_connection: Any | None = None
+    if active_runtime_config.database_url:
+        try:
+            knowledge_promotion_connection = connect_psycopg(active_runtime_config.database_url)
+        except Exception:
+            knowledge_promotion_connection = None
+    knowledge_promotion_service = KnowledgePromotionService(
+        repository=active_file_repository,
+        vector_store=active_knowledge_vector_store,
+        vector_source=active_file_vector_source,
+        live_knowledge_store=chatbi_application.orchestrator.knowledge_store,
+        knowledge_connection=knowledge_promotion_connection,
+    )
+    file_share_approval_service = FileShareApprovalService(
+        repository=active_file_repository,
+        auth_store=active_auth_service.store,
+    )
+    # Spec FV10.1's owner-isolation filter (§4's shared_visibility()) needs
+    # active_file_repository to resolve "does this promoted document's
+    # source file have an active share grant for this user" — not available
+    # yet when _build_default_chatbi_application constructed the store, so
+    # it is rewired here now that the repository exists.
+    if chatbi_application.orchestrator.knowledge_store is not None:
+        chatbi_application.orchestrator.knowledge_store.set_shared_visibility_resolver(
+            file_share_visibility_resolver(active_file_repository)
+        )
+    retention_worker = RetentionWorker(
+        repository=active_file_repository,
+        knowledge_promotion_service=knowledge_promotion_service,
+    )
+    active_file_query_llm_client = file_query_llm_client or build_llm_client_from_runtime_config(
+        active_runtime_config
+    )
+    file_data_agent = FileDataAgent(
+        repository=active_file_repository,
+        storage=active_object_storage_adapter,
+        llm_client=active_file_query_llm_client,
+    )
+    file_answer_synthesizer = GroundedAnswerSynthesizer(llm_client=active_file_query_llm_client)
+    file_result_merger = ResultMerger()
+    # Spec FV10.6 FR-FV10-065: evidence scoped to exactly one request's own
+    # unstructured file_ids, distinct from the org-wide promoted knowledge
+    # base retrieved a few lines below.
+    file_scoped_retriever = FileScopedRetriever(
+        vector_source=active_file_vector_source,
+        repository=active_file_repository,
+    )
+    question_classifier = QuestionClassifier()
+    # Spec FV10.4: one session-scoped file_ids inheritance store (FR-FV10-055)
+    # and one shared conversation-history store (FR-FV10-051/052), reused by
+    # both the main orchestrator path and the file-data branch below, so a
+    # session's context is continuous regardless of which branch answered a
+    # given turn.
+    session_file_context = InMemorySessionFileContext()
+    shared_query_history = chatbi_application.orchestrator.history
+    # FR-FV10-021: FederatedQueryAgent joins a user's uploaded file with a
+    # real business.* table in one DuckDB session, ad hoc, per query — it
+    # never writes anything back. business_table_catalog answers "which
+    # table is this question about, and which of its columns may this role
+    # see" from live Postgres (information_schema + governance.access_policies),
+    # not the aspirational static DataModelCatalog, so it never proposes a
+    # join against a table that doesn't actually exist in this deployment.
+    active_business_table_catalog = business_table_catalog
+    if active_business_table_catalog is None and active_runtime_config.database_url:
+        try:
+            active_business_table_catalog = BusinessTableCatalog(
+                connect_psycopg(active_runtime_config.database_url)
+            )
+        except Exception:
+            active_business_table_catalog = None
+    active_federated_query_agent = federated_query_agent or FederatedQueryAgent(
+        repository=active_file_repository,
+        storage=active_object_storage_adapter,
+        llm_client=active_file_query_llm_client,
+        pg_row_source=ReadOnlyBusinessRowSource(
+            ReadOnlyQueryExecutor(connect_psycopg),
+            active_runtime_config.readonly_database_url,
+        ),
     )
     active_query_audit_log: QueryAuditLog | None = None
     if active_runtime_config.database_url:
@@ -1976,6 +2325,430 @@ def create_app(
             },
         )
 
+    def _validate_chat_query_file_ids(
+        file_ids: tuple[str, ...], user_id: str
+    ) -> tuple[str, str] | None:
+        """Pre-flight FR-FV10-015 check, run before any request bookkeeping.
+
+        Returns ``(error_code, message)`` for the first invalid file_id, or
+        ``None`` if every file_id exists, belongs to ``user_id``, and is
+        ready. Kept separate from ``FileDataAgent.run()``'s own ownership
+        check so a bad file_id short-circuits before the accepted-request
+        audit/metadata bookkeeping below, exactly like the existing
+        request-shape ``problems`` check above.
+        """
+
+        for candidate_file_id in file_ids:
+            candidate_file = active_file_repository.get(candidate_file_id)
+            if (
+                candidate_file is None
+                or candidate_file.deleted_at is not None
+                or candidate_file.user_id != user_id
+            ):
+                return "FILE_NOT_FOUND", f"file_id '{candidate_file_id}' was not found."
+            if candidate_file.status != "ready":
+                return "FILE_NOT_READY", f"file_id '{candidate_file_id}' is not ready yet."
+        return None
+
+    def _handle_file_data_chat_query(
+        *,
+        file_ids: tuple[str, ...],
+        question: str,
+        user_id: str,
+        role: str,
+        org_id: str,
+        trace_id: str,
+        session_id: str,
+        locale: Locale,
+        conversation_context: tuple[Mapping[str, str], ...] = (),
+    ) -> ApiEnvelope:
+        """FR-FV10-016/017/018/021: answer from the attached files, joined
+        with a real business table when the question names one
+        FederatedQueryAgent can safely read for this role (see
+        business_table_catalog.py); otherwise FileDataAgent alone.
+
+        Spec FV10.4: also folds in the session's recent-turn conversation
+        context (FR-FV10-052) and, on a successful answer, saves this turn
+        into the same shared history store the main orchestrator path uses,
+        so a later turn sees continuous context regardless of which branch
+        answered a given question.
+
+        Spec FV10.6 FR-FV10-064/065/066: file_ids is split into a structured
+        subset (queried as a table, as above) and an unstructured subset
+        (searched via FileScopedRetriever, scoped to exactly these file_ids
+        — not the org-wide knowledge base retrieved further down). The
+        answer is synthesized from whichever subset produced something; the
+        request only fails when neither did.
+        """
+
+        files_by_id: dict[str, UserUploadedFile] = {}
+        for candidate_file_id in file_ids:
+            candidate_file = active_file_repository.get(candidate_file_id)
+            if candidate_file is None:
+                # Already screened by _validate_chat_query_file_ids(); reaching
+                # here means the file changed between that check and this call.
+                return error_envelope(
+                    code=ApiErrorCode.REQ_INVALID_ARGUMENT,
+                    message=f"File became unavailable while answering: file_id '{candidate_file_id}' not found.",
+                    trace_id=trace_id,
+                )
+            files_by_id[candidate_file_id] = candidate_file
+        structured_ids, unstructured_ids = split_file_ids_by_type(file_ids, files_by_id)
+
+        # 10-followups/10: the request-level relevance gate (10.8) only
+        # requires ANY attached file to be relevant, so a mixed selection
+        # can still carry a structured file irrelevant to this question —
+        # filter it out here too, or FileDataAgent/FederatedQueryAgent
+        # would be asked to query it anyway, alongside the unstructured
+        # file that kept this request in the file branch in the first
+        # place. Reuses question_references_attached_file() unmodified;
+        # if this empties structured_ids, the existing "no structured
+        # file" path below already handles that gracefully.
+        #
+        # Only applied when unstructured_ids is also non-empty — i.e. a
+        # genuine mixed selection with a real alternative to fall back on.
+        # A pure-structured selection must NOT be filtered here: this is
+        # the same question_references_attached_file() verdict 10.9's
+        # safety net already overrode at the request level specifically so
+        # a structured-only request with no better destination stays in
+        # the file branch and lets FileDataAgent's own schema-grounded LLM
+        # take an educated guess — filtering unconditionally would silently
+        # re-empty structured_ids right after 10.9 decided to keep it,
+        # undoing that safety net. Caught by test_chat_query_phrased_with_
+        # synonyms_the_schema_gate_misses_still_reaches_the_file_branch
+        # (Spec FV10.9) regressing when this filter was first written
+        # unconditionally.
+        if unstructured_ids:
+            structured_ids = tuple(
+                fid for fid in structured_ids if question_references_attached_file(question, files_by_id[fid])
+            )
+
+        pg_context = (
+            resolve_federated_pg_context(question, role, active_business_table_catalog)
+            if active_business_table_catalog is not None and structured_ids
+            else None
+        )
+
+        try:
+            if not structured_ids:
+                federated_output = None
+                file_output = None
+            elif pg_context is not None:
+                federated_output = active_federated_query_agent.run(
+                    FederatedQueryAgentInput(
+                        file_ids=structured_ids,
+                        user_id=user_id,
+                        pg_context=pg_context,
+                        question=question,
+                        role=cast(Any, role),
+                        trace_id=trace_id,
+                        conversation_context=conversation_context,
+                    )
+                )
+                file_output = None
+            else:
+                federated_output = None
+                file_output = file_data_agent.run(
+                    FileDataAgentInput(
+                        file_ids=structured_ids,
+                        user_id=user_id,
+                        question=question,
+                        role=cast(Any, role),
+                        trace_id=trace_id,
+                        conversation_context=conversation_context,
+                    )
+                )
+        except (FileOwnershipError, FileNotReadyError) as exc:
+            # Already screened by _validate_chat_query_file_ids(); reaching
+            # here means the file changed between that check and this call.
+            return error_envelope(
+                code=ApiErrorCode.REQ_INVALID_ARGUMENT,
+                message=f"File became unavailable while answering: {exc}.",
+                trace_id=trace_id,
+            )
+
+        if federated_output is not None:
+            guardrail_blocked = federated_output.error_code == "FederatedQueryGuardrailBlocked"
+            sql_text = federated_output.federated_sql or ""
+            table_result = federated_output.table_result
+            structured_error_code = federated_output.error_code
+        elif file_output is not None:
+            guardrail_blocked = file_output.guardrail_blocked
+            sql_text = file_output.duckdb_sql or ""
+            table_result = file_output.table_result
+            structured_error_code = file_output.error_code
+        else:
+            # No structured file was selected — nothing was queried, so
+            # there is nothing to guardrail-block or to report a SQL error
+            # for. FR-FV10-066 decides below whether unstructured evidence
+            # can still answer the question.
+            guardrail_blocked = False
+            sql_text = ""
+            table_result = None
+            structured_error_code = None
+
+        if guardrail_blocked:
+            return envelope(
+                data={
+                    "answer_text": "",
+                    "sql_text": sql_text,
+                    "table_result": None,
+                    "chart_spec": None,
+                    "analytics_result": None,
+                    "evidence_list": (),
+                    "evidence_uncertainty": False,
+                    "retrieval_stats": None,
+                    "agent_timeline": [],
+                    "confidence": 0.0,
+                    "table_result_source": None,
+                    "guardrail_blocked": True,
+                },
+                trace_id=trace_id,
+            )
+
+        # FR-FV10-065/070: evidence from the unstructured subset's own
+        # content, scoped to exactly these file_ids. Distinct from the
+        # org-wide knowledge_base_evidence retrieved further below.
+        uploaded_file_evidence: tuple[EvidenceItem, ...] = ()
+        file_content_unavailable = False
+        if unstructured_ids:
+            uploaded_file_evidence = file_scoped_retriever.retrieve(
+                question=question, file_ids=unstructured_ids
+            )
+            if not uploaded_file_evidence and all(
+                not file_scoped_retriever.vector_source.chunks_with_vectors_for_file(fid)
+                for fid in unstructured_ids
+            ):
+                file_content_unavailable = True
+
+        if table_result is None and not uploaded_file_evidence:
+            if file_content_unavailable:
+                # FR-FV10-070: every requested unstructured file's content is
+                # currently unretrievable (see Spec FV10.5 §7's FileVectorSource
+                # durability gap) — distinct from "searched and found nothing".
+                return error_envelope(
+                    code=ApiErrorCode.REQ_INVALID_ARGUMENT,
+                    message=(
+                        "The selected document(s)' content is not available for search "
+                        "right now. Try re-uploading the file and asking again."
+                    ),
+                    trace_id=trace_id,
+                )
+            if structured_error_code in ("INVALID_GENERATED_SQL", "QUERY_RESOURCE_EXCEEDED"):
+                # FR-FV10-018/022: the LLM produced SQL that DuckDB rejected
+                # (prose instead of a SELECT, wrong column names, ...) or the
+                # query exceeded the memory budget, and no unstructured
+                # evidence was available to answer from instead.
+                return error_envelope(
+                    code=ApiErrorCode.AGENT_PARTIAL_FAILURE,
+                    message=(
+                        "The file query could not be completed."
+                        if structured_error_code == "INVALID_GENERATED_SQL"
+                        else "The file query exceeded the resource budget."
+                    ),
+                    trace_id=trace_id,
+                )
+            # FR-FV10-066: neither a structured table nor unstructured
+            # evidence answered this question — supersedes Spec FV10.5's
+            # narrower NO_STRUCTURED_FILE_SELECTED, which fired even when
+            # the selection was entirely (answerable) documents.
+            return error_envelope(
+                code=ApiErrorCode.REQ_INVALID_ARGUMENT,
+                message=(
+                    "None of the selected files could answer this question. Structured "
+                    "files (CSV/XLSX) are queried as a table; documents (PDF/DOCX/TXT/MD/"
+                    "PPTX) are searched for relevant content — neither produced a usable "
+                    "result here."
+                ),
+                trace_id=trace_id,
+            )
+
+        task_types = question_classifier.classify(question)
+
+        # FR-FV10-023-adjacent: a file query can also pull evidence from the
+        # shared knowledge base (which includes any admin-promoted uploads —
+        # see business_table_catalog.py's sibling feature, promotion.py) when
+        # the question also reads as a why/explain question. This is the org
+        # knowledge base, distinct from uploaded_file_evidence above, which is
+        # scoped to exactly this request's own file_ids (Spec FV10.6).
+        knowledge_base_evidence: tuple[EvidenceItem, ...] = ()
+        active_knowledge_store = chatbi_application.orchestrator.knowledge_store
+        if TaskType.RAG_EXPLANATION in task_types and active_knowledge_store is not None:
+            retrieval_result = active_knowledge_store.retrieve(
+                RetrievalQuery(
+                    question=question,
+                    requesting_user_id=user_id,
+                    user_role=role,
+                    top_k=5,
+                    # FR-FV10-052/056: prior turns fold into the retrieval
+                    # text so a referent like "that" still finds the right
+                    # document, with no separate rewrite step.
+                    conversation_context=" ".join(
+                        message["content"] for message in conversation_context
+                    ),
+                ),
+                trace_id=trace_id,
+            )
+            # 10-followups/12: retrieve() has no meaningful relevance floor
+            # of its own (InMemoryKnowledgeStore only excludes a score of
+            # exactly 0), and the RAG_EXPLANATION trigger above is a broad
+            # keyword match ("internal", "report", "review" ...) that fires
+            # on plenty of ordinary file-comparison questions. Without this
+            # floor, whatever the knowledge base's nearest-ranked documents
+            # are — relevant or not — would be rendered as "Sources" for an
+            # answer that never actually used them.
+            knowledge_base_evidence = tuple(
+                EvidenceItem(
+                    source_id=item.source_id,
+                    title=item.title,
+                    citation_anchor=item.citation_anchor,
+                    snippet=item.snippet,
+                    relevance_score=item.relevance_score,
+                )
+                for item in retrieval_result.evidence_list
+                if item.relevance_score >= _MIN_KNOWLEDGE_BASE_RELEVANCE_SCORE
+            )
+
+        merged = (
+            file_result_merger.merge(
+                federated_output=federated_output,
+                uploaded_file_evidence=uploaded_file_evidence,
+                knowledge_base_evidence=knowledge_base_evidence,
+            )
+            if federated_output is not None
+            else file_result_merger.merge(
+                file_output=file_output,
+                uploaded_file_evidence=uploaded_file_evidence,
+                knowledge_base_evidence=knowledge_base_evidence,
+            )
+        )
+        # FR-FV10-066: an evidence-only answer (no structured file queried,
+        # or its query produced nothing) has no SourcedTableResult to read —
+        # fall back to an empty table rather than indexing into an empty tuple.
+        if merged.table_results:
+            sourced_table_result = merged.table_results[0].table_result
+            table_result_source: str | None = merged.table_results[0].source
+        else:
+            sourced_table_result = TableResult(columns=(), rows=())
+            table_result_source = None
+        evidence_payload = tuple(
+            {
+                "source_id": sourced.evidence.source_id,
+                "title": (
+                    f"📎 {sourced.evidence.title}" if sourced.is_uploaded_file else sourced.evidence.title
+                ),
+                "citation_anchor": sourced.evidence.citation_anchor,
+                "snippet": sourced.evidence.snippet,
+                "relevance_score": sourced.evidence.relevance_score,
+            }
+            for sourced in merged.evidence_items
+        )
+        all_evidence = tuple(sourced.evidence for sourced in merged.evidence_items)
+
+        # FR-FV10-021-adjacent: analytics on the file/federated table itself,
+        # when the question also reads as a forecast/anomaly question and the
+        # table has a plausible time column. No real semantic metric backs
+        # this data, so metric_id/semantic_version_id are synthetic labels,
+        # not a registered metric — see _infer_time_value_columns' docstring.
+        analytics_result: Mapping[str, object] | None = None
+        if TaskType.ANALYTICS in task_types:
+            inferred_columns = _infer_time_value_columns(sourced_table_result)
+            if inferred_columns is not None:
+                time_column, value_column = inferred_columns
+                analytics_run = AnalyticsServiceRunner(
+                    analytics_service=chatbi_application.orchestrator.analytics_service,
+                    trace_id=trace_id,
+                    metric_id=f"file_upload:{value_column}",
+                    semantic_version_id="file_upload",
+                    time_column=time_column,
+                    value_column=value_column,
+                    grain=AnalyticsGrain.MONTH,
+                    rows=sourced_table_result.rows,
+                ).run()
+                analytics_result = analytics_run.payload
+
+        # 10-followups/12: a federated JOIN that matched zero rows despite
+        # non-empty sources on both sides must not be narrated as a
+        # confirmed "no variance"/threshold result — it may just as easily
+        # be a join-key mismatch (spelling, capitalization, date format).
+        zero_row_join_instructions = (
+            "The comparison query matched zero rows across the join, even though "
+            "both the file and the warehouse table each had data for this period. "
+            "State plainly that no matching records were found across the join "
+            "key(s) — do not claim this means all values are within any threshold, "
+            "since a join-key mismatch (e.g. differing spelling, capitalization, or "
+            "date format between the file and the warehouse column) produces the "
+            "identical zero-row result. Recommend the user verify that the shared "
+            "column(s) use the same values/format in both sources."
+            if federated_output is not None and federated_output.zero_row_join_caveat
+            else None
+        )
+        synthesis = file_answer_synthesizer.synthesize(
+            question=question,
+            safe_sql=sql_text,
+            table_result=sourced_table_result,
+            evidence_list=all_evidence,
+            user_id=user_id,
+            org_id=org_id,
+            trace_id=trace_id,
+            conversation_context=conversation_context,
+            extra_instructions=zero_row_join_instructions,
+        )
+        warnings = synthesis.warnings
+        if federated_output is not None and federated_output.degraded:
+            warnings = (
+                *warnings,
+                WarningMessage(
+                    code=ErrorCode.AGENT_PARTIAL_FAILURE,
+                    message=(
+                        "Joined query fell back to file-only data: "
+                        f"{federated_output.degradation_reason}."
+                    ),
+                ),
+            )
+        # Spec FV10.4: record this turn in the shared history store so a
+        # later turn in the same session — whether it also goes through the
+        # file branch or through the main orchestrator — sees it as context.
+        shared_query_history.save(
+            QueryHistoryRecord(
+                trace_id=trace_id,
+                request=QueryRequest(
+                    user_id=user_id,
+                    session_id=session_id,
+                    question=question,
+                    locale=locale,
+                    role=UserRole(role),
+                ),
+                answer=QueryAnswer(
+                    answer_text=synthesis.answer_text,
+                    sql_text=sql_text,
+                    table_result=sourced_table_result,
+                    trace_id=trace_id,
+                    evidence_list=all_evidence,
+                    confidence=0.8,
+                    warnings=warnings,
+                ),
+            )
+        )
+        return envelope(
+            data={
+                "answer_text": synthesis.answer_text,
+                "sql_text": sql_text,
+                "table_result": sourced_table_result,
+                "chart_spec": None,
+                "analytics_result": analytics_result,
+                "evidence_list": evidence_payload,
+                "evidence_uncertainty": False,
+                "retrieval_stats": None,
+                "agent_timeline": [],
+                "confidence": 0.8,
+                "table_result_source": table_result_source,
+                "guardrail_blocked": False,
+            },
+            trace_id=trace_id,
+            warnings=warnings,
+        )
+
     @app.post("/api/v2/chat/query")
     def chat_query_v2(  # pyright: ignore[reportUnusedFunction]
         body: dict[str, Any],
@@ -2013,6 +2786,28 @@ def create_app(
             else (auth_context.roles[0] if auth_context.roles else str(body["role"]))
         )
 
+        raw_file_ids = cast(Any, body.get("file_ids"))
+        file_ids: tuple[str, ...] = ()
+        if isinstance(raw_file_ids, list) and raw_file_ids:
+            file_ids = tuple(str(item) for item in cast(list[Any], raw_file_ids))
+        session_id = str(body["session_id"])
+        # Spec FV10.4 FR-FV10-055: resolved once, early, before any routing
+        # decision — explicit file_ids always win and become this session's
+        # new inherited value; an empty request inherits the session's
+        # current value (or stays fileless if it has none yet).
+        effective_file_ids = resolve_effective_file_ids(file_ids, session_id, session_file_context)
+        if effective_file_ids:
+            file_id_problem = _validate_chat_query_file_ids(effective_file_ids, effective_user_id)
+            if file_id_problem is not None:
+                error_code, error_message = file_id_problem
+                return v2_error_response(
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    code=error_code,
+                    message=error_message,
+                    status_code=422,
+                )
+
         active_request_metadata_store.save_accepted(
             RequestMetadataRecord(
                 trace_id=trace_id,
@@ -2041,20 +2836,91 @@ def create_app(
                 "session_id": str(body["session_id"]),
             },
         )
+        request_locale = Locale(str(body["locale"]))
         payload = ChatQueryRequestPayload(
             user_id=effective_user_id,
-            session_id=str(body["session_id"]),
+            session_id=session_id,
             question=str(body["question"]),
-            locale=Locale(str(body["locale"])),
+            locale=request_locale,
             role=UserRole(effective_role),
         )
         _query_started_at = __import__("time").perf_counter()
-        api_envelope = chatbi_application.handle_chat_query(
-            payload,
-            trace_id=legacy_trace_id_from_v2(trace_id),
-            idempotency_key=idempotency_key,
-            org_id=auth_context.org_id,
+        # 10-followups/08: a file being attached does not mean this question
+        # is about it — e.g. a checkbox left checked from an earlier turn,
+        # then an unrelated question asked via a quick-question shortcut.
+        # FileDataAgent/FederatedQueryAgent have no graceful "not about your
+        # file" output (the LLM either maps the question onto the wrong
+        # columns or writes SQL that doesn't bind), so route away from the
+        # file branch entirely when nothing about the attached files is
+        # relevant to this question, exactly as if no file were attached —
+        # the main orchestrator then gets a real chance to answer from an
+        # actual business table. A question with too few content words to
+        # judge (a pronoun-style follow-up like "What about this one?") is
+        # always treated as relevant, deferring to conversation-history
+        # resolution (Spec FV10.4) instead of guessing.
+        effective_files = (
+            tuple(
+                file
+                for file in (active_file_repository.get(fid) for fid in effective_file_ids)
+                if file is not None
+            )
+            if effective_file_ids
+            else ()
         )
+        route_to_file_branch = bool(effective_file_ids) and question_references_any_attached_file(
+            str(body["question"]), effective_files
+        )
+        if not route_to_file_branch and effective_files and not question_classifier.has_data_domain_signal(
+            str(body["question"])
+        ):
+            # 10-followups/09: a token-overlap "not relevant" verdict only
+            # proves the question shares no literal vocabulary with the
+            # file's own column names/filename — it is not proof the main
+            # orchestrator has anywhere real to send the question instead
+            # (e.g. a business synonym like "territory" for a file's own
+            # "region" column). Corroborate with an independent signal:
+            # QuestionClassifier's own business-data-keyword check, already
+            # tuned for "does this look like a real data question" and used
+            # unconditionally for almost every question via its `not is_rag`
+            # fallback (TaskType.SQL_QUERY) — too broad to reuse directly,
+            # so this reads the narrower `_DATA_DOMAIN_KEYWORDS` hit instead.
+            # No independent business-data signal either: the safer default
+            # is to trust the file branch's own schema-grounded LLM over a
+            # guess that the orchestrator can do better with nothing to go
+            # on, so this overrides back to routing into the file branch.
+            route_to_file_branch = True
+        if route_to_file_branch:
+            # FR-FV10-052: the file branch does not carry its own history
+            # store, so its conversation context is resolved here from the
+            # same shared store the main orchestrator path reads internally.
+            # Uses file_conversation_context_turns, not the general
+            # orchestrator's wider conversation_context_turns: an older turn
+            # here may have queried a completely different table with a
+            # different value format (e.g. "January" vs "2026-01"), and the
+            # SQL-generation LLM has been observed anchoring on that format
+            # instead of the current file's schema, silently returning zero
+            # rows. A tighter window limits how much of that can bleed in.
+            history_turns = shared_query_history.list_by_session(
+                session_id, limit=active_runtime_config.file_conversation_context_turns
+            )
+            api_envelope = _handle_file_data_chat_query(
+                file_ids=effective_file_ids,
+                question=str(body["question"]),
+                user_id=effective_user_id,
+                role=effective_role,
+                org_id=auth_context.org_id,
+                trace_id=legacy_trace_id_from_v2(trace_id),
+                session_id=session_id,
+                locale=request_locale,
+                conversation_context=conversation_messages(history_turns),
+            )
+        else:
+            api_envelope = chatbi_application.handle_chat_query(
+                payload,
+                trace_id=legacy_trace_id_from_v2(trace_id),
+                idempotency_key=idempotency_key,
+                org_id=auth_context.org_id,
+            )
         _query_latency_ms = int((__import__("time").perf_counter() - _query_started_at) * 1000)
         if active_query_audit_log is not None:
             try:
@@ -2099,6 +2965,7 @@ def create_app(
                     rag_doc_count=len(_evs),
                     has_chart=bool(isinstance(_data, dict) and _data.get("chart_spec")),
                     evidence_json=__import__("json").dumps(_ev_simple),
+                    file_ids_used=file_ids or None,
                     latency_ms=_query_latency_ms,
                     finished_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
                 ))
@@ -3537,6 +4404,1272 @@ def create_app(
             trace_id=active_trace_id,
         )
         return response_from_envelope(envelope, status_code=status_code_for_envelope(envelope))
+
+    # --- FV-10 user file upload and hybrid analysis (spec section 5) -------
+
+    _STRUCTURED_FILE_EXTENSIONS = {"csv", "xlsx", "xls", "tsv", "json"}
+    _VALID_FILE_SCOPES = {"session", "user", "org", "team"}
+
+    def _file_role(auth_context: AuthContext) -> str:
+        if "admin" in auth_context.roles:
+            return "admin"
+        if "analyst" in auth_context.roles:
+            return "analyst"
+        return "business_user"
+
+    def _file_extension(filename: str) -> str:
+        return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    def _current_file_storage_usage(org_id: str, user_id: str) -> int:
+        return sum(
+            existing_file.size_bytes
+            for existing_file in active_file_repository.list_by_owner(
+                org_id, user_id, all_versions=True
+            )
+        )
+
+    def _purge_duplicate_archived_file_if_any(user_id: str, content_hash: str) -> None:
+        """FR-FV10-049/NFR-FV10-017: purge a same-user archived duplicate on re-upload."""
+
+        duplicate = active_file_repository.find_archived_by_content_hash(user_id, content_hash)
+        if duplicate is not None:
+            purge_duplicate_archived_file(
+                repository=active_file_repository,
+                storage=active_object_storage_adapter,
+                file=duplicate,
+            )
+
+    def _file_visibility(file_record: UserUploadedFile, auth_context: AuthContext) -> FileAccessDecision:
+        shares = active_file_repository.shares_for_file(file_record.file_id)
+        return file_access_checker.check(
+            requester_user_id=auth_context.user_id,
+            requester_org_id=auth_context.org_id,
+            role=cast(Any, _file_role(auth_context)),
+            file=file_record,
+            shares=shares,
+        )
+
+    def _is_owner_or_admin(file_record: UserUploadedFile, auth_context: AuthContext) -> bool:
+        is_owner = file_record.user_id == auth_context.user_id
+        is_admin_same_org = (
+            "admin" in auth_context.roles and file_record.org_id == auth_context.org_id
+        )
+        return is_owner or is_admin_same_org
+
+    def _share_summary(share: FileShareRecord) -> dict[str, Any]:
+        return {
+            "share_id": share.share_id,
+            "file_id": share.file_id,
+            "granted_by": share.granted_by,
+            "granted_to": share.granted_to,
+            "permission": share.permission,
+            "created_at": share.created_at.isoformat(),
+            "revoked_at": share.revoked_at.isoformat() if share.revoked_at is not None else None,
+        }
+
+    def _share_request_summary(request: FileShareRequest) -> dict[str, Any]:
+        return {
+            "request_id": request.request_id,
+            "file_id": request.file_id,
+            "requested_by": request.requested_by,
+            "org_id": request.org_id,
+            "role": request.role,
+            "status": request.status,
+            "requested_at": request.requested_at.isoformat(),
+            "decided_by": request.decided_by,
+            "decided_at": request.decided_at.isoformat() if request.decided_at is not None else None,
+            "reason": request.reason,
+        }
+
+    def _file_summary(file_record: UserUploadedFile) -> dict[str, Any]:
+        return {
+            "file_id": file_record.file_id,
+            "original_name": file_record.original_name,
+            "file_type": file_record.file_type,
+            "mime_type": file_record.mime_type,
+            "size_bytes": file_record.size_bytes,
+            "status": file_record.status,
+            "error_reason": file_record.error_reason,
+            "scope": file_record.scope,
+            "session_id": file_record.session_id,
+            "schema_json": file_record.schema_json,
+            "row_count": file_record.row_count,
+            "chunk_count": file_record.chunk_count,
+            "file_group_id": file_record.file_group_id,
+            "version_number": file_record.version_number,
+            "is_latest": file_record.is_latest,
+            "promoted_to_doc_id": file_record.promoted_to_doc_id,
+            "created_at": file_record.created_at.isoformat(),
+        }
+
+    def _admin_file_summary(file_record: UserUploadedFile) -> dict[str, Any]:
+        return {**_file_summary(file_record), "user_id": file_record.user_id}
+
+    def _structured_preview(file_record: UserUploadedFile) -> dict[str, Any]:
+        parquet_bytes = active_object_storage_adapter.get_object(
+            parquet_storage_key(file_record.storage_key)
+        )
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as temp_file:
+            temp_file.write(parquet_bytes)
+            temp_path = Path(temp_file.name)
+        connection = duckdb.connect(":memory:")
+        try:
+            relation = connection.sql(f"SELECT * FROM read_parquet('{temp_path}') LIMIT 50")
+            columns = list(relation.columns)
+            rows = [dict(zip(columns, row, strict=True)) for row in relation.fetchall()]
+        finally:
+            connection.close()
+            temp_path.unlink(missing_ok=True)
+        return {
+            "file_id": file_record.file_id,
+            "columns": columns,
+            "rows": rows,
+            "total_row_count": file_record.row_count or 0,
+        }
+
+    def _unstructured_preview(file_record: UserUploadedFile) -> dict[str, Any]:
+        chunks_with_vectors = active_file_vector_source.chunks_with_vectors_for_file(
+            file_record.file_id
+        )
+        preview_chunks = [chunk.text for chunk, _vector in chunks_with_vectors[:3]]
+        return {
+            "file_id": file_record.file_id,
+            "chunks": preview_chunks,
+            "total_chunk_count": file_record.chunk_count or 0,
+        }
+
+    @app.post("/api/v2/files/upload")
+    async def upload_file_v2(  # pyright: ignore[reportUnusedFunction]
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...),
+        scope: str = Form("session"),
+        session_id: str | None = Form(None),
+        description: str | None = Form(None),
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        del description
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_file_upload")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:upload"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        if scope not in _VALID_FILE_SCOPES:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="scope must be one of session, user, org, team.",
+                status_code=422,
+            )
+        if scope == "session" and not session_id:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="session_id is required when scope is 'session'.",
+                status_code=422,
+            )
+
+        original_name = sanitize_filename(file.filename or "upload")
+        format_result = FileFormatValidator().validate(original_name)
+        if format_result is FileFormatCheckResult.BLOCKED:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="FILE_FORMAT_NOT_ALLOWED",
+                message=f"'{original_name}' has an unsupported file extension.",
+                status_code=422,
+            )
+
+        content_bytes = await file.read()
+
+        mime_result = MimeMagicChecker().check(original_name, content_bytes)
+        if mime_result is MimeCheckResult.MISMATCH:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="FILE_MIME_MISMATCH",
+                message="Declared content type does not match the file's contents.",
+                status_code=422,
+            )
+
+        role = _file_role(auth_context)
+        size_result = FileSizeEnforcer().check(role=cast(Any, role), size=len(content_bytes))
+        if size_result is FileSizeCheckResult.EXCEEDS_PER_FILE_LIMIT:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="FILE_SIZE_EXCEEDED",
+                message="File exceeds the per-file size limit for this role.",
+                status_code=413,
+            )
+
+        used_bytes = _current_file_storage_usage(auth_context.org_id, auth_context.user_id)
+        quota_result = StorageQuotaEnforcer().check(
+            role=cast(Any, role), used=used_bytes, adding=len(content_bytes)
+        )
+        if quota_result is StorageQuotaCheckResult.EXCEEDS_QUOTA:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="STORAGE_QUOTA_EXCEEDED",
+                message="Uploading this file would exceed the account's storage quota.",
+                status_code=409,
+            )
+
+        extension = _file_extension(original_name)
+        file_type = "structured" if extension in _STRUCTURED_FILE_EXTENSIONS else "unstructured"
+        content_hash = sha256(content_bytes).hexdigest()
+        _purge_duplicate_archived_file_if_any(auth_context.user_id, content_hash)
+
+        existing_latest_files = active_file_repository.list_by_owner(
+            auth_context.org_id, auth_context.user_id, all_versions=False
+        )
+        previous_latest = next(
+            (
+                existing_file
+                for existing_file in existing_latest_files
+                if existing_file.original_name == original_name
+            ),
+            None,
+        )
+        version_assignment = file_version_manager.on_upload(
+            previous_latest.file_group_id if previous_latest is not None else None,
+            previous_latest,
+        )
+        if version_assignment.superseded_previous_latest is not None:
+            active_file_repository.save(version_assignment.superseded_previous_latest)
+
+        storage_key = build_storage_key(
+            auth_context.org_id,
+            auth_context.user_id,
+            version_assignment.file_id,
+            original_name,
+        )
+        active_object_storage_adapter.put_object(storage_key, content_bytes)
+
+        new_file = UserUploadedFile(
+            file_id=version_assignment.file_id,
+            org_id=auth_context.org_id,
+            user_id=auth_context.user_id,
+            original_name=original_name,
+            file_type=cast(Any, file_type),
+            mime_type=file.content_type or "application/octet-stream",
+            size_bytes=len(content_bytes),
+            storage_key=storage_key,
+            status="processing",
+            scope=cast(Any, scope),
+            session_id=session_id if scope == "session" else None,
+            file_group_id=version_assignment.file_group_id,
+            version_number=version_assignment.version_number,
+            is_latest=True,
+            created_at=datetime.now(timezone.utc),
+            content_hash=content_hash,
+        )
+        active_file_repository.save(new_file)
+
+        background_tasks.add_task(
+            file_processing_worker.process, new_file.file_id, extension=extension
+        )
+
+        return JSONResponse(
+            status_code=202,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "file_id": new_file.file_id,
+                    "original_name": new_file.original_name,
+                    "file_type": new_file.file_type,
+                    "status": new_file.status,
+                    "schema": None,
+                    "size_bytes": new_file.size_bytes,
+                    "created_at": new_file.created_at.isoformat(),
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.get("/api/v2/files")
+    def list_files_v2(  # pyright: ignore[reportUnusedFunction]
+        scope: str | None = None,
+        status: str | None = None,
+        all_versions: bool = False,
+        page_size: int = 20,
+        offset: int = 0,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_files_list")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:read"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        matching_files = active_file_repository.list_by_owner(
+            auth_context.org_id,
+            auth_context.user_id,
+            scope=cast(Any, scope) if scope is not None else None,
+            status=cast(Any, status) if status is not None else None,
+            all_versions=all_versions,
+        )
+        bounded_page_size = max(1, page_size)
+        page = matching_files[offset : offset + bounded_page_size]
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "files": [_file_summary(file_record) for file_record in page],
+                    "total": len(matching_files),
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.get("/api/v2/files/{file_id}")
+    def get_file_v2(  # pyright: ignore[reportUnusedFunction]
+        file_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_files_get")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:read"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        file_record = active_file_repository.get(file_id)
+        if file_record is None or file_record.deleted_at is not None:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if _file_visibility(file_record, auth_context) is FileAccessDecision.DENY:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": _file_summary(file_record),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.delete("/api/v2/files/{file_id}")
+    def delete_file_v2(  # pyright: ignore[reportUnusedFunction]
+        file_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_files_delete")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:delete"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        file_record = active_file_repository.get(file_id)
+        if file_record is None or file_record.deleted_at is not None:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if _file_visibility(file_record, auth_context) is FileAccessDecision.DENY:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+
+        if not _is_owner_or_admin(file_record, auth_context):
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_FORBIDDEN",
+                message="Only the file owner or an admin can delete this file.",
+                status_code=403,
+            )
+
+        active_object_storage_adapter.delete_object(file_record.storage_key)
+        if file_record.file_type == "structured":
+            active_object_storage_adapter.delete_object(
+                parquet_storage_key(file_record.storage_key)
+            )
+        active_file_repository.soft_delete(file_id, deleted_at=datetime.now(timezone.utc))
+
+        return JSONResponse(status_code=204, content=None)
+
+    @app.get("/api/v2/files/{file_id}/preview")
+    def preview_file_v2(  # pyright: ignore[reportUnusedFunction]
+        file_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_files_preview")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:read"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        file_record = active_file_repository.get(file_id)
+        if file_record is None or file_record.deleted_at is not None:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if _file_visibility(file_record, auth_context) is FileAccessDecision.DENY:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if file_record.status != "ready":
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="FILE_NOT_READY",
+                message="File is not ready for preview yet.",
+                status_code=422,
+            )
+
+        preview_data = (
+            _structured_preview(file_record)
+            if file_record.file_type == "structured"
+            else _unstructured_preview(file_record)
+        )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": preview_data,
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/files/upload/init")
+    def init_chunked_file_upload_v2(  # pyright: ignore[reportUnusedFunction]
+        body: FileUploadInitRequestBody,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_file_upload_init")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:upload"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        if body.scope not in _VALID_FILE_SCOPES:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="scope must be one of session, user, org, team.",
+                status_code=422,
+            )
+        if body.scope == "session" and not body.session_id:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="session_id is required when scope is 'session'.",
+                status_code=422,
+            )
+        if body.file_size_bytes <= 0:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="file_size_bytes must be greater than 0.",
+                status_code=422,
+            )
+
+        original_name = sanitize_filename(body.original_name)
+        format_result = FileFormatValidator().validate(original_name)
+        if format_result is FileFormatCheckResult.BLOCKED:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="FILE_FORMAT_NOT_ALLOWED",
+                message=f"'{original_name}' has an unsupported file extension.",
+                status_code=422,
+            )
+
+        role = _file_role(auth_context)
+        size_result = FileSizeEnforcer().check(role=cast(Any, role), size=body.file_size_bytes)
+        if size_result is FileSizeCheckResult.EXCEEDS_PER_FILE_LIMIT:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="FILE_SIZE_EXCEEDED",
+                message="File exceeds the per-file size limit for this role.",
+                status_code=413,
+            )
+
+        used_bytes = _current_file_storage_usage(auth_context.org_id, auth_context.user_id)
+        quota_result = StorageQuotaEnforcer().check(
+            role=cast(Any, role), used=used_bytes, adding=body.file_size_bytes
+        )
+        if quota_result is StorageQuotaCheckResult.EXCEEDS_QUOTA:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="STORAGE_QUOTA_EXCEEDED",
+                message="Uploading this file would exceed the account's storage quota.",
+                status_code=409,
+            )
+
+        upload_id = new_upload_id()
+        chunk_count = compute_chunk_count(body.file_size_bytes, DEFAULT_CHUNK_SIZE_BYTES)
+        chunk_keys = tuple(
+            chunk_staging_key(auth_context.org_id, auth_context.user_id, upload_id, chunk_index)
+            for chunk_index in range(chunk_count)
+        )
+        presigned_urls = [
+            active_object_storage_adapter.generate_upload_url(key, ttl=MAX_UPLOAD_SESSION_TTL)
+            for key in chunk_keys
+        ]
+
+        active_chunk_upload_session_store.save(
+            ChunkUploadSession(
+                upload_id=upload_id,
+                org_id=auth_context.org_id,
+                user_id=auth_context.user_id,
+                original_name=original_name,
+                mime_type=body.mime_type,
+                file_size_bytes=body.file_size_bytes,
+                scope=cast(Any, body.scope),
+                chunk_size_bytes=DEFAULT_CHUNK_SIZE_BYTES,
+                chunk_count=chunk_count,
+                chunk_keys=chunk_keys,
+                expires_at=presigned_urls[0].expires_at,
+                session_id=body.session_id if body.scope == "session" else None,
+                description=body.description,
+            )
+        )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "upload_id": upload_id,
+                    "chunk_size_bytes": DEFAULT_CHUNK_SIZE_BYTES,
+                    "chunk_count": chunk_count,
+                    "presigned_urls": [
+                        {"chunk_index": chunk_index, "url": presigned_urls[chunk_index].url}
+                        for chunk_index in range(chunk_count)
+                    ],
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/files/upload/{upload_id}/complete")
+    def complete_chunked_file_upload_v2(  # pyright: ignore[reportUnusedFunction]
+        upload_id: str,
+        body: FileUploadCompleteRequestBody,
+        background_tasks: BackgroundTasks,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_file_upload_complete")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:upload"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        session = active_chunk_upload_session_store.get(upload_id)
+        if (
+            session is None
+            or session.org_id != auth_context.org_id
+            or session.user_id != auth_context.user_id
+        ):
+            return tenant_not_found_response(
+                active_request_id,
+                trace_id,
+                "UPLOAD_SESSION_NOT_FOUND",
+                "Upload session was not found.",
+            )
+
+        if session.is_expired(now=datetime.now(timezone.utc)):
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="UPLOAD_SESSION_EXPIRED",
+                message="The presigned upload URLs for this session have expired.",
+                status_code=410,
+            )
+
+        provided_chunk_indexes = {etag.chunk_index for etag in body.etags}
+        missing_chunk_indexes = set(range(session.chunk_count)) - provided_chunk_indexes
+        if missing_chunk_indexes:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message=f"Missing ETags for chunk indexes: {sorted(missing_chunk_indexes)}.",
+                status_code=422,
+            )
+
+        try:
+            ordered_chunk_bytes = [
+                active_object_storage_adapter.get_object(key) for key in session.chunk_keys
+            ]
+        except ObjectNotFoundError:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="One or more chunks were not uploaded before completing.",
+                status_code=422,
+            )
+        assembled_bytes = b"".join(ordered_chunk_bytes)
+
+        mime_result = MimeMagicChecker().check(session.original_name, assembled_bytes)
+        if mime_result is MimeCheckResult.MISMATCH:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="FILE_MIME_MISMATCH",
+                message="Declared content type does not match the assembled file's contents.",
+                status_code=422,
+            )
+
+        extension = _file_extension(session.original_name)
+        file_type = "structured" if extension in _STRUCTURED_FILE_EXTENSIONS else "unstructured"
+        content_hash = sha256(assembled_bytes).hexdigest()
+        _purge_duplicate_archived_file_if_any(session.user_id, content_hash)
+
+        existing_latest_files = active_file_repository.list_by_owner(
+            session.org_id, session.user_id, all_versions=False
+        )
+        previous_latest = next(
+            (
+                existing_file
+                for existing_file in existing_latest_files
+                if existing_file.original_name == session.original_name
+            ),
+            None,
+        )
+        version_assignment = file_version_manager.on_upload(
+            previous_latest.file_group_id if previous_latest is not None else None,
+            previous_latest,
+        )
+        if version_assignment.superseded_previous_latest is not None:
+            active_file_repository.save(version_assignment.superseded_previous_latest)
+
+        storage_key = build_storage_key(
+            session.org_id, session.user_id, version_assignment.file_id, session.original_name
+        )
+        active_object_storage_adapter.put_object(storage_key, assembled_bytes)
+        for chunk_key in session.chunk_keys:
+            active_object_storage_adapter.delete_object(chunk_key)
+        active_chunk_upload_session_store.delete(upload_id)
+
+        new_file = UserUploadedFile(
+            file_id=version_assignment.file_id,
+            org_id=session.org_id,
+            user_id=session.user_id,
+            original_name=session.original_name,
+            file_type=cast(Any, file_type),
+            mime_type=session.mime_type,
+            size_bytes=len(assembled_bytes),
+            storage_key=storage_key,
+            status="processing",
+            scope=session.scope,
+            session_id=session.session_id,
+            file_group_id=version_assignment.file_group_id,
+            version_number=version_assignment.version_number,
+            is_latest=True,
+            created_at=datetime.now(timezone.utc),
+            content_hash=content_hash,
+        )
+        active_file_repository.save(new_file)
+
+        background_tasks.add_task(
+            file_processing_worker.process, new_file.file_id, extension=extension
+        )
+
+        return JSONResponse(
+            status_code=202,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {"file_id": new_file.file_id, "status": new_file.status},
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/files/{file_id}/share")
+    def share_file_v2(  # pyright: ignore[reportUnusedFunction]
+        file_id: str,
+        body: FileShareRequestBody,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_file_share")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:share"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        file_record = active_file_repository.get(file_id)
+        if file_record is None or file_record.deleted_at is not None:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if _file_visibility(file_record, auth_context) is FileAccessDecision.DENY:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if not _is_owner_or_admin(file_record, auth_context):
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_FORBIDDEN",
+                message="Only the file owner or an admin can share this file.",
+                status_code=403,
+            )
+
+        granted_to = body.granted_to.strip()
+        if not granted_to:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="granted_to is required.",
+                status_code=422,
+            )
+        if granted_to == file_record.user_id:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="Cannot share a file with its own owner.",
+                status_code=422,
+            )
+
+        target_user = active_auth_service.store.get_user(granted_to)
+        if target_user is None or target_user.org_id != file_record.org_id:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="granted_to must be a user in the same organization as the file.",
+                status_code=422,
+            )
+
+        share = FileShareRecord(
+            share_id=new_share_id(),
+            file_id=file_id,
+            granted_by=auth_context.user_id,
+            granted_to=granted_to,
+            created_at=datetime.now(timezone.utc),
+        )
+        active_file_repository.save_share(share)
+
+        return JSONResponse(
+            status_code=201,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": _share_summary(share),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.delete("/api/v2/files/{file_id}/share/{share_id}")
+    def revoke_file_share_v2(  # pyright: ignore[reportUnusedFunction]
+        file_id: str,
+        share_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_file_share_revoke")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="files:share"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        file_record = active_file_repository.get(file_id)
+        if file_record is None or file_record.deleted_at is not None:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if _file_visibility(file_record, auth_context) is FileAccessDecision.DENY:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if not _is_owner_or_admin(file_record, auth_context):
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_FORBIDDEN",
+                message="Only the file owner or an admin can revoke shares for this file.",
+                status_code=403,
+            )
+
+        existing_share = active_file_repository.share_by_id(share_id)
+        if existing_share is not None and existing_share.file_id == file_id:
+            active_file_repository.revoke_share(share_id, revoked_at=datetime.now(timezone.utc))
+
+        return JSONResponse(status_code=204, content=None)
+
+    @app.get("/api/v2/admin/files")
+    def list_org_files_v2(  # pyright: ignore[reportUnusedFunction]
+        user_id: str | None = None,
+        status: str | None = None,
+        file_type: str | None = None,
+        q: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        """Admin review surface: every uploader's files in this org, for FR-FV10-033.
+
+        Separate from ``GET /api/v2/files`` (which is self-scoped) — this one
+        needs ``admin:knowledge:promote`` because its purpose is letting an
+        admin find and review files before deciding whether to promote them.
+        """
+
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_admin_files_list")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="admin:knowledge:promote"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        bounded_limit = max(1, limit)
+        bounded_offset = max(0, offset)
+        matching_files = active_file_repository.list_by_org(
+            auth_context.org_id,
+            user_id=user_id or None,
+            status=cast(Any, status) if status else None,
+            file_type=cast(Any, file_type) if file_type else None,
+            q=q or None,
+            limit=bounded_limit,
+            offset=bounded_offset,
+        )
+        total = active_file_repository.count_by_org(
+            auth_context.org_id,
+            user_id=user_id or None,
+            status=cast(Any, status) if status else None,
+            file_type=cast(Any, file_type) if file_type else None,
+            q=q or None,
+        )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "files": [_admin_file_summary(file_record) for file_record in matching_files],
+                    "total": total,
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/admin/knowledge/promote-file")
+    def promote_file_to_knowledge_base_v2(  # pyright: ignore[reportUnusedFunction]
+        body: PromoteFileRequestBody,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_knowledge_promote")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="admin:knowledge:promote"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        try:
+            promoted = knowledge_promotion_service.promote_file(
+                body.file_id,
+                role=cast(Any, _file_role(auth_context)),
+                org_id=auth_context.org_id,
+            )
+        except NotAuthorizedToPromoteError:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_FORBIDDEN",
+                message="Only an admin can promote a file to the knowledge base.",
+                status_code=403,
+            )
+        except FileNotPromotableError:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="FILE_NOT_PROMOTABLE",
+                message="File must be an unstructured, ready file owned by this organization.",
+                status_code=422,
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "file_id": promoted.file_id,
+                    "promoted_to_doc_id": promoted.promoted_to_doc_id,
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.delete("/api/v2/admin/knowledge/{doc_id}")
+    def demote_knowledge_base_document_v2(  # pyright: ignore[reportUnusedFunction]
+        doc_id: str,
+        mode: str | None = None,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_knowledge_demote")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="admin:knowledge:demote"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        if mode != "demote":
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="VALIDATION_ERROR",
+                message="mode=demote is required to demote a knowledge base document.",
+                status_code=422,
+            )
+
+        try:
+            knowledge_promotion_service.demote_document(
+                doc_id,
+                role=cast(Any, _file_role(auth_context)),
+                org_id=auth_context.org_id,
+            )
+        except NotAuthorizedToPromoteError:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_FORBIDDEN",
+                message="Only an admin can demote a knowledge base document.",
+                status_code=403,
+            )
+        except DocumentNotPromotedError:
+            return tenant_not_found_response(
+                active_request_id,
+                trace_id,
+                "DOCUMENT_NOT_FOUND",
+                "Document was not found or is not a live promotion.",
+            )
+
+        return JSONResponse(status_code=204, content=None)
+
+    # --- FV10.2 file sharing approval workflow ------------------------------
+
+    @app.post("/api/v2/files/{file_id}/share-requests")
+    def submit_file_share_request_v2(  # pyright: ignore[reportUnusedFunction]
+        file_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_file_share_request")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="files:share_requests:submit",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        # NFR-FV10-014: an invisible file (doesn't exist, wrong org, no
+        # access) must 404 like every other file-visibility denial; a file
+        # the caller can see but does not own is a distinguishable 403,
+        # matching share_file_v2's existing ownership-gate pattern.
+        file_record = active_file_repository.get(file_id)
+        if file_record is None or file_record.deleted_at is not None:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if _file_visibility(file_record, auth_context) is FileAccessDecision.DENY:
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        if file_record.user_id != auth_context.user_id:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="AUTH_FORBIDDEN",
+                message="Only the file owner can request sharing.",
+                status_code=403,
+            )
+
+        try:
+            request = file_share_approval_service.submit_request(
+                file_id,
+                requester_user_id=auth_context.user_id,
+                requester_org_id=auth_context.org_id,
+                requester_role=_file_role(auth_context),
+            )
+        except (FileNotShareableError, NotFileOwnerError):
+            # Already screened above; reaching here means the file changed
+            # between that check and this call (e.g. concurrent delete).
+            return tenant_not_found_response(
+                active_request_id, trace_id, "FILE_NOT_FOUND", "File was not found."
+            )
+        except PendingShareRequestExistsError:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="SHARE_REQUEST_ALREADY_PENDING",
+                message="A pending share request already exists for this file.",
+                status_code=409,
+            )
+
+        return JSONResponse(
+            status_code=201,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": _share_request_summary(request),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.get("/api/v2/admin/share-requests")
+    def list_admin_share_requests_v2(  # pyright: ignore[reportUnusedFunction]
+        status: str | None = None,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_admin_share_requests_list")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="admin:share_requests:review",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        requests = active_file_repository.list_share_requests(
+            auth_context.org_id,
+            status=cast(Any, status) if status else None,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {
+                    "items": [_share_request_summary(request) for request in requests],
+                    "count": len(requests),
+                },
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/admin/share-requests/{request_id}/approve")
+    def approve_file_share_request_v2(  # pyright: ignore[reportUnusedFunction]
+        request_id: str,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        header_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(header_request_id, "req_share_request_approve")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="admin:share_requests:review",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        try:
+            approved = file_share_approval_service.approve(
+                request_id,
+                admin_user_id=auth_context.user_id,
+                admin_org_id=auth_context.org_id,
+            )
+        except ShareRequestNotFoundError:
+            return tenant_not_found_response(
+                active_request_id,
+                trace_id,
+                "SHARE_REQUEST_NOT_FOUND",
+                "Share request was not found.",
+            )
+        except ShareRequestNotPendingError:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="SHARE_REQUEST_ALREADY_DECIDED",
+                message="This share request has already been decided.",
+                status_code=409,
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": _share_request_summary(approved),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @app.post("/api/v2/admin/share-requests/{request_id}/reject")
+    def reject_file_share_request_v2(  # pyright: ignore[reportUnusedFunction]
+        request_id: str,
+        body: ShareRequestRejectBody,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        header_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(header_request_id, "req_share_request_reject")
+        auth_context, auth_error = authenticate_v2(
+            authorization,
+            trace_id,
+            active_request_id,
+            required_permission="admin:share_requests:review",
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        try:
+            rejected = file_share_approval_service.reject(
+                request_id,
+                admin_user_id=auth_context.user_id,
+                admin_org_id=auth_context.org_id,
+                reason=body.reason,
+            )
+        except ShareRequestNotFoundError:
+            return tenant_not_found_response(
+                active_request_id,
+                trace_id,
+                "SHARE_REQUEST_NOT_FOUND",
+                "Share request was not found.",
+            )
+        except ShareRequestNotPendingError:
+            return v2_error_response(
+                request_id=active_request_id,
+                trace_id=trace_id,
+                code="SHARE_REQUEST_ALREADY_DECIDED",
+                message="This share request has already been decided.",
+                status_code=409,
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": _share_request_summary(rejected),
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    # --- FV10.3 archived-files admin view and retention scheduling ---------
+
+    @app.get("/api/v2/admin/files/archived")
+    def list_archived_files_v2(  # pyright: ignore[reportUnusedFunction]
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    ) -> JSONResponse:
+        """§6.4: admin-only, org-wide, one signed download URL per archived file."""
+
+        trace_id = new_trace_id_v2()
+        active_request_id = v2_request_id_from_header(request_id, "req_admin_files_archived")
+        auth_context, auth_error = authenticate_v2(
+            authorization, trace_id, active_request_id, required_permission="admin:knowledge:promote"
+        )
+        if auth_error is not None or auth_context is None:
+            return cast(JSONResponse, auth_error)
+
+        archived_files = active_file_repository.list_archived_by_org(auth_context.org_id)
+        items = [
+            {
+                **_admin_file_summary(file_record),
+                "download_url": active_object_storage_adapter.generate_download_url(
+                    file_record.storage_key
+                ).url,
+            }
+            for file_record in archived_files
+        ]
+        return JSONResponse(
+            status_code=200,
+            content={
+                "trace_id": trace_id,
+                "request_id": active_request_id,
+                "data": {"files": items, "total": len(items)},
+                "warnings": [],
+                "error": None,
+            },
+        )
+
+    @asynccontextmanager
+    async def _retention_sweep_lifespan(_: FastAPI) -> AsyncGenerator[None]:
+        task = asyncio.create_task(
+            _run_retention_sweep_loop(retention_worker, retention_sweep_interval_seconds)
+        )
+        try:
+            yield
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    # Reassigning Router.lifespan_context after construction (rather than
+    # passing lifespan= to FastAPI(...) up front) because retention_worker
+    # is not built until well after `app` already exists — everything else
+    # in this function is wired the same way, as a post-construction step.
+    app.router.lifespan_context = _retention_sweep_lifespan
 
     return app
 

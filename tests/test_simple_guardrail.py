@@ -89,6 +89,33 @@ def test_guardrail_rejects_delete_statement() -> None:
     assert result.error_code is ErrorCode.SQL_DENY_STATEMENT
 
 
+def test_guardrail_rejects_dangerous_statement_with_sql_deny_statement() -> None:
+    # 10-followups/13 (TC-FV10-210, AC-FV10-098): a real dangerous-statement
+    # match still produces the original SQL_DENY_STATEMENT code, unchanged.
+    result = SimpleSqlGuardrail().check(
+        "UPDATE revenue_by_month SET revenue = 0",
+        make_request(),
+        new_trace_id(),
+    )
+
+    assert result.decision is GuardrailDecision.DENY
+    assert result.error_code is ErrorCode.SQL_DENY_STATEMENT
+
+
+def test_guardrail_rejects_prose_output_with_sql_deny_unrecognized_output() -> None:
+    # 10-followups/13 (TC-FV10-211, AC-FV10-099): model output that isn't SQL
+    # at all, and contains no dangerous keyword, must be distinguishable from
+    # a real write attempt.
+    result = SimpleSqlGuardrail().check(
+        "I don't have a churn table to query against.",
+        make_request(),
+        new_trace_id(),
+    )
+
+    assert result.decision is GuardrailDecision.DENY
+    assert result.error_code is ErrorCode.SQL_DENY_UNRECOGNIZED_OUTPUT
+
+
 def test_guardrail_rejects_multiple_statements() -> None:
     result = SimpleSqlGuardrail().check(
         "SELECT * FROM orders; DROP TABLE orders",

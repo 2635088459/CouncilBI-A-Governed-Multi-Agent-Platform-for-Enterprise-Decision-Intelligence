@@ -1,4 +1,4 @@
-import { FormEvent, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, ReactElement, ReactNode, useEffect, useRef, useState } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,9 +46,36 @@ type ChatResponse = {
     citations?: EvidenceCard[];
     evidence_list?: EvidenceCard[];
     agent_timeline?: AgentTimelineItem[];
+    table_result_source?: string | null;
   };
   warnings?: WarningItem[];
   error?: ApiError | null;
+};
+
+// Spec FV10.4 FR-FV10-054: one entry per turn in the current session's
+// continuous thread (question + its answer), appended rather than
+// replacing the previous turn.
+type ChatTurn = {
+  id: string;
+  question: string;
+  state: ApiState;
+  response?: ChatResponse;
+  errorCode: string;
+  error: string;
+};
+
+// One row from GET /api/v2/chat/history — a lightweight summary of a past
+// turn (not the full original answer envelope: no table_result/chart_spec/
+// evidence_list/agent_timeline, those aren't persisted for replay here).
+type HistoryItem = {
+  trace_id?: string;
+  session_id?: string;
+  question?: string;
+  answer_text?: string;
+  sql_text?: string;
+  status?: string;
+  error_code?: string;
+  created_at?: string;
 };
 
 type LoginResponse = {
@@ -83,6 +110,19 @@ type AuditStats = {
   success_rate: number;
   avg_latency_ms: number;
   unique_users: number;
+};
+
+type UploadedFile = {
+  file_id: string;
+  original_name: string;
+  file_type?: string;
+  mime_type?: string;
+  size_bytes?: number;
+  status: string; // processing | schema_ready | indexing | ready | failed
+  error_reason?: string | null;
+  row_count?: number | null;
+  promoted_to_doc_id?: string | null;
+  created_at: string;
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -139,6 +179,48 @@ async function getJson<T>(path: string, token: string): Promise<T> {
   return payload;
 }
 
+async function uploadFile(file: File, token: string): Promise<{ data?: { file_id?: string }; error?: ApiError | null }> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("scope", "user");
+  const resp = await fetch(apiUrl("/api/v2/files/upload"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "X-Request-Id": requestIdStr() },
+    body: form,
+  });
+  const payload = (await resp.json().catch(() => ({}))) as { data?: { file_id?: string }; error?: ApiError | null };
+  if (!resp.ok) {
+    throw new Error(payload.error?.message ?? `HTTP ${resp.status}`);
+  }
+  return payload;
+}
+
+async function deleteFile(fileId: string, token: string): Promise<void> {
+  await fetch(apiUrl(`/api/v2/files/${fileId}`), {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}`, "X-Request-Id": requestIdStr() },
+  });
+}
+
+function fmtBytes(n?: number): string {
+  if (!n) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fileStatusLabel(status: string): string {
+  if (status === "ready") return "Ready";
+  if (status === "failed") return "Failed";
+  return "Processing…";
+}
+
+function fileStatusBadgeClass(status: string): string {
+  if (status === "ready") return "badge-ok";
+  if (status === "failed") return "badge-err";
+  return "badge-neu";
+}
+
 function resolveAnswer(r?: ChatResponse) {
   return r?.data?.answer_text ?? r?.data?.answer;
 }
@@ -153,6 +235,93 @@ function resolveChart(r?: ChatResponse) {
 }
 function resolveTimeline(r?: ChatResponse): AgentTimelineItem[] {
   return r?.data?.agent_timeline ?? [];
+}
+
+// LLM-synthesized answer_text arrives as markdown (bold, bullet/numbered
+// lists, occasional headers) — rendered as a bare string it shows literal
+// "**text**" and loses all line breaks (a <p> collapses whitespace). This is
+// a small hand-rolled renderer rather than a dependency: the answer shape
+// this app actually produces is narrow (paragraphs, lists, bold/code spans).
+function renderInline(text: string, keyPrefix: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let i = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    const token = match[0];
+    if (token.startsWith("**")) {
+      parts.push(<strong key={`${keyPrefix}-b-${i++}`}>{token.slice(2, -2)}</strong>);
+    } else {
+      parts.push(<code key={`${keyPrefix}-c-${i++}`}>{token.slice(1, -1)}</code>);
+    }
+    lastIndex = match.index + token.length;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts;
+}
+
+function renderMarkdown(text: string, className = "answer-text"): ReactElement {
+  const lines = text.split("\n");
+  const blocks: ReactNode[] = [];
+  let paraBuffer: string[] = [];
+  let listBuffer: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+  let blockKey = 0;
+
+  function flushPara() {
+    const joined = paraBuffer.join(" ").trim();
+    if (joined) blocks.push(<p key={`p-${blockKey++}`}>{renderInline(joined, `p-${blockKey}`)}</p>);
+    paraBuffer = [];
+  }
+  function flushList() {
+    if (!listBuffer.length) return;
+    const items = listBuffer.map((item, idx) => (
+      <li key={`li-${blockKey}-${idx}`}>{renderInline(item, `li-${blockKey}-${idx}`)}</li>
+    ));
+    blocks.push(
+      listType === "ol" ? <ol key={`list-${blockKey++}`}>{items}</ol> : <ul key={`list-${blockKey++}`}>{items}</ul>
+    );
+    listBuffer = [];
+    listType = null;
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushPara();
+      flushList();
+      continue;
+    }
+    const headerMatch = line.match(/^#{1,6}\s+(.*)/);
+    const bulletMatch = line.match(/^[-*]\s+(.*)/);
+    const numberedMatch = line.match(/^\d+\.\s+(.*)/);
+    if (headerMatch) {
+      flushPara();
+      flushList();
+      blocks.push(
+        <p key={`h-${blockKey++}`} className="answer-heading">{renderInline(headerMatch[1], `h-${blockKey}`)}</p>
+      );
+    } else if (bulletMatch) {
+      flushPara();
+      if (listType !== "ul") flushList();
+      listType = "ul";
+      listBuffer.push(bulletMatch[1]);
+    } else if (numberedMatch) {
+      flushPara();
+      if (listType !== "ol") flushList();
+      listType = "ol";
+      listBuffer.push(numberedMatch[1]);
+    } else {
+      flushList();
+      paraBuffer.push(line);
+    }
+  }
+  flushPara();
+  flushList();
+
+  return <div className={className}>{blocks}</div>;
 }
 
 function readableAgentName(v?: string) {
@@ -343,6 +512,119 @@ function AgentTimeline({ items, open, onToggle }: {
   );
 }
 
+// ─── Files Panel ──────────────────────────────────────────────────────────────
+
+function FilesPanel({
+  token,
+  selectedFileIds,
+  onToggleFile,
+}: {
+  token: string;
+  selectedFileIds: string[];
+  onToggleFile: (fileId: string) => void;
+}) {
+  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [uploadState, setUploadState] = useState<ApiState>("idle");
+  const [uploadError, setUploadError] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function refresh() {
+    try {
+      const resp = await getJson<{ data?: { files?: UploadedFile[] } }>("/api/v2/files", token);
+      setFiles(resp.data?.files ?? []);
+    } catch {
+      // keep the last-known list on a transient refresh failure
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const hasPending = files.some((f) => f.status !== "ready" && f.status !== "failed");
+    if (!hasPending) return;
+    const id = setInterval(refresh, 2000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
+
+  async function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadState("loading");
+    setUploadError("");
+    try {
+      await uploadFile(file, token);
+      await refresh();
+      setUploadState("success");
+    } catch (err) {
+      setUploadState("error");
+      setUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  async function handleDelete(fileId: string) {
+    await deleteFile(fileId, token);
+    await refresh();
+  }
+
+  return (
+    <div className="sidebar-block">
+      <p className="sidebar-label">My files</p>
+      <input
+        ref={inputRef}
+        type="file"
+        id="file-upload-input"
+        className="file-input-hidden"
+        accept=".csv,.xlsx,.xls,.pdf,.docx,.pptx,.txt"
+        onChange={handleFileChange}
+      />
+      <label htmlFor="file-upload-input" className="sidebar-admin-btn file-upload-btn">
+        {uploadState === "loading" ? "Uploading…" : "+ Upload file"}
+      </label>
+      {uploadState === "error" && <p className="form-error">{uploadError}</p>}
+      {files.length === 0 ? (
+        <p className="sidebar-hint">No files uploaded yet.</p>
+      ) : (
+        <div className="file-list">
+          {files.map((f) => (
+            <div className="file-item" key={f.file_id}>
+              <label className="file-item-main">
+                <input
+                  type="checkbox"
+                  disabled={f.status !== "ready"}
+                  checked={selectedFileIds.includes(f.file_id)}
+                  onChange={() => onToggleFile(f.file_id)}
+                />
+                <span className="file-item-name" title={f.original_name}>{f.original_name}</span>
+              </label>
+              <div className="file-item-meta">
+                <span className={`status-badge ${fileStatusBadgeClass(f.status)}`}>{fileStatusLabel(f.status)}</span>
+                <span className="file-item-size">{fmtBytes(f.size_bytes)}</span>
+                <button
+                  type="button"
+                  className="file-item-delete"
+                  onClick={() => handleDelete(f.file_id)}
+                  aria-label={`Delete ${f.original_name}`}
+                >
+                  ×
+                </button>
+              </div>
+              {f.status === "failed" && f.error_reason && (
+                <p className="file-item-error">{f.error_reason}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 
 function LoginScreen({ onSuccess }: { onSuccess: (token: string, email: string) => void }) {
@@ -445,7 +727,7 @@ function AdminDashboard({ token }: { token: string }) {
   const [records, setRecords] = useState<AuditRecord[]>([]);
   const [stats, setStats] = useState<AuditStats | null>(null);
   const [total, setTotal] = useState(0);
-  const [loadState, setLoadState] = useState<ApiState>("idle");
+  const [loadState, setLoadState] = useState<ApiState>("loading");
   const [filterUser, setFilterUser] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterFrom, setFilterFrom] = useState("");
@@ -476,6 +758,11 @@ function AdminDashboard({ token }: { token: string }) {
       setLoadState("error");
     }
   }
+
+  useEffect(() => {
+    load(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function fmtTime(iso: string) {
     const d = new Date(iso);
@@ -581,7 +868,7 @@ function AdminDashboard({ token }: { token: string }) {
                             {r.answer_text && (
                               <div className="audit-detail-section">
                                 <p className="audit-detail-label">Answer</p>
-                                <p className="audit-detail-answer">{r.answer_text}</p>
+                                {renderMarkdown(r.answer_text, "audit-detail-answer")}
                               </div>
                             )}
                             {r.evidence && r.evidence.length > 0 && (
@@ -617,6 +904,415 @@ function AdminDashboard({ token }: { token: string }) {
   );
 }
 
+// ─── Admin Files Review ───────────────────────────────────────────────────────
+
+type AdminFileRecord = UploadedFile & { user_id: string };
+
+function AdminFilesPanel({ token }: { token: string }) {
+  const [records, setRecords] = useState<AdminFileRecord[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadState, setLoadState] = useState<ApiState>("loading");
+  const [filterUser, setFilterUser] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterType, setFilterType] = useState("all");
+  const [filterName, setFilterName] = useState("");
+  const [page, setPage] = useState(0);
+  const [actionError, setActionError] = useState("");
+  const [pendingFileId, setPendingFileId] = useState("");
+  const pageSize = 20;
+
+  async function load(pg = 0) {
+    setLoadState("loading");
+    setActionError("");
+    try {
+      const params = new URLSearchParams();
+      if (filterUser.trim()) params.set("user_id", filterUser.trim());
+      if (filterStatus !== "all") params.set("status", filterStatus);
+      if (filterType !== "all") params.set("file_type", filterType);
+      if (filterName.trim()) params.set("q", filterName.trim());
+      params.set("limit", String(pageSize));
+      params.set("offset", String(pg * pageSize));
+      const resp = await getJson<{ data: { files: AdminFileRecord[]; total: number } }>(
+        `/api/v2/admin/files?${params}`, token
+      );
+      setRecords(resp?.data?.files ?? []);
+      setTotal(resp?.data?.total ?? 0);
+      setPage(pg);
+      setLoadState("success");
+    } catch {
+      setLoadState("error");
+    }
+  }
+
+  useEffect(() => {
+    load(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handlePromote(fileId: string) {
+    setPendingFileId(fileId);
+    setActionError("");
+    try {
+      await postJson("/api/v2/admin/knowledge/promote-file", { file_id: fileId }, token);
+      await load(page);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPendingFileId("");
+    }
+  }
+
+  async function handleDemote(docId: string) {
+    setPendingFileId(docId);
+    setActionError("");
+    try {
+      const resp = await fetch(apiUrl(`/api/v2/admin/knowledge/${docId}?mode=demote`), {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, "X-Request-Id": requestIdStr() },
+      });
+      if (!resp.ok) {
+        const payload = (await resp.json().catch(() => ({}))) as { error?: ApiError };
+        throw new Error(payload.error?.message ?? `HTTP ${resp.status}`);
+      }
+      await load(page);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPendingFileId("");
+    }
+  }
+
+  function fmtTime(iso: string) {
+    const d = new Date(iso);
+    return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  const totalPages = Math.ceil(total / pageSize);
+
+  return (
+    <div className="admin-dashboard">
+      <div className="audit-filter-bar">
+        <input
+          className="audit-filter-input"
+          placeholder="Filter by uploader…"
+          value={filterUser}
+          onChange={(e) => setFilterUser(e.target.value)}
+        />
+        <input
+          className="audit-filter-input"
+          placeholder="Search filename…"
+          value={filterName}
+          onChange={(e) => setFilterName(e.target.value)}
+        />
+        <select className="audit-filter-select" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+          <option value="all">All status</option>
+          <option value="ready">Ready</option>
+          <option value="processing">Processing</option>
+          <option value="failed">Failed</option>
+        </select>
+        <select className="audit-filter-select" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+          <option value="all">All types</option>
+          <option value="structured">Structured</option>
+          <option value="unstructured">Unstructured</option>
+        </select>
+        <button className="audit-load-btn" onClick={() => load(0)} disabled={loadState === "loading"}>
+          {loadState === "loading" ? "Loading…" : "Load"}
+        </button>
+      </div>
+
+      {actionError && <p className="form-error">{actionError}</p>}
+
+      {loadState === "idle" && (
+        <div className="audit-empty">Click <strong>Load</strong> to view uploaded files across the org.</div>
+      )}
+      {loadState === "success" && records.length === 0 && (
+        <div className="audit-empty">No files found.</div>
+      )}
+      {records.length > 0 && (
+        <>
+          <div className="audit-table-wrap">
+            <table className="audit-table">
+              <thead>
+                <tr>
+                  <th>Uploaded</th>
+                  <th>Uploader</th>
+                  <th>File</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Size</th>
+                  <th>Knowledge Base</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.map((f) => {
+                  const canPromote = f.file_type === "unstructured" && f.status === "ready" && !f.promoted_to_doc_id;
+                  const canDemote = Boolean(f.promoted_to_doc_id);
+                  const isPending = pendingFileId === f.file_id || pendingFileId === f.promoted_to_doc_id;
+                  return (
+                    <tr key={f.file_id}>
+                      <td className="audit-cell-time">{fmtTime(f.created_at)}</td>
+                      <td className="audit-cell-user" title={f.user_id}>{f.user_id}</td>
+                      <td className="audit-cell-question" title={f.original_name}>{f.original_name}</td>
+                      <td>{f.file_type}</td>
+                      <td>
+                        <span className={`status-badge ${fileStatusBadgeClass(f.status)}`}>{fileStatusLabel(f.status)}</span>
+                      </td>
+                      <td>{fmtBytes(f.size_bytes)}</td>
+                      <td>{f.promoted_to_doc_id ? "Promoted" : "—"}</td>
+                      <td>
+                        {canPromote && (
+                          <button
+                            type="button"
+                            className="sidebar-admin-btn"
+                            disabled={isPending}
+                            onClick={() => handlePromote(f.file_id)}
+                          >
+                            {isPending ? "…" : "Promote"}
+                          </button>
+                        )}
+                        {canDemote && (
+                          <button
+                            type="button"
+                            className="sidebar-admin-btn"
+                            disabled={isPending}
+                            onClick={() => handleDemote(f.promoted_to_doc_id as string)}
+                          >
+                            {isPending ? "…" : "Demote"}
+                          </button>
+                        )}
+                        {!canPromote && !canDemote && "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {totalPages > 1 && (
+            <div className="audit-pagination">
+              <button disabled={page === 0} onClick={() => load(page - 1)}>← Prev</button>
+              <span>Page {page + 1} of {totalPages} ({total} total)</span>
+              <button disabled={page >= totalPages - 1} onClick={() => load(page + 1)}>Next →</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// One turn (question + its answer) within the current session's continuous
+// thread (FR-FV10-054). Pulled out of App's render so the thread can just
+// `.map()` this per turn instead of repeating the whole answer layout.
+function ChatTurnCard({
+  turn,
+  timelineOpen,
+  onToggleTimeline,
+}: {
+  turn: ChatTurn;
+  timelineOpen: boolean;
+  onToggleTimeline: () => void;
+}) {
+  const { state, response, errorCode, error, question } = turn;
+  const answer = resolveAnswer(response);
+  const rows = resolveRows(response);
+  const citations = resolveCitations(response);
+  const chart = resolveChart(response);
+  const timeline = resolveTimeline(response);
+  const warnings = response?.warnings ?? [];
+  const traceId = response?.trace_id;
+
+  return (
+    <div className="answer-area">
+      <p className="turn-question">{question}</p>
+      {/* Header bar */}
+      <div className={`answer-header ${state}`}>
+        <div className="answer-header-left">
+          <span className="answer-label">Answer</span>
+          {response?.data?.table_result_source === "file" && (
+            <span className="file-source-chip">📎 File data</span>
+          )}
+          {traceId && <code className="trace-chip">{traceId}</code>}
+        </div>
+        <StatusBadge status={state === "loading" ? "running" : state === "error" ? "error" : "succeeded"} />
+      </div>
+
+      {/* Error */}
+      {state === "error" && error && (
+        errorCode === "SQL_GUARDRAIL_BLOCKED" ? (
+          <div className="answer-blocked">
+            <div className="blocked-icon">⊘</div>
+            <div className="blocked-body">
+              <p className="blocked-title">Query blocked — data modifications are not permitted</p>
+              <p className="blocked-desc">
+                ChatBI is a read-only analytics platform. Requests to insert, update, delete,
+                or otherwise modify data are automatically rejected by the security guardrail.
+                If you have a legitimate data correction request, contact your data team directly.
+              </p>
+            </div>
+          </div>
+        ) : errorCode === "SQL_NOT_QUERYABLE" ? (
+          <div className="answer-blocked answer-blocked--warn">
+            <div className="blocked-icon">⚠</div>
+            <div className="blocked-body">
+              <p className="blocked-title">Can't generate a query for this question</p>
+              <p className="blocked-desc">
+                This question doesn't match a read-only query we can run against the
+                available data. Try rephrasing it as a specific data question, or
+                check that the data you're asking about exists in a connected table.
+              </p>
+            </div>
+          </div>
+        ) : errorCode === "VALIDATION_ERROR" ? (
+          <div className="answer-blocked answer-blocked--warn">
+            <div className="blocked-icon">⚠</div>
+            <div className="blocked-body">
+              <p className="blocked-title">Request rejected — invalid query format</p>
+              <p className="blocked-desc">{error}</p>
+            </div>
+          </div>
+        ) : errorCode === "REQ_INVALID_ARGUMENT" ? (
+          <div className="answer-blocked answer-blocked--warn">
+            <div className="blocked-icon">⚠</div>
+            <div className="blocked-body">
+              <p className="blocked-title">Can't answer this with the selected file(s)</p>
+              <p className="blocked-desc">{error}</p>
+            </div>
+          </div>
+        ) : (
+          <div className="answer-error">
+            {errorCode && <span className="answer-error-code">{errorCode}</span>}
+            {error}
+          </div>
+        )
+      )}
+
+      {/* Loading skeleton */}
+      {state === "loading" && (
+        <div className="loading-area">
+          <div className="skeleton-line long" />
+          <div className="skeleton-line medium" />
+          <div className="skeleton-line short" />
+        </div>
+      )}
+
+      {/* Answer text */}
+      {answer && state !== "loading" && renderMarkdown(answer)}
+
+      {/* Warnings */}
+      {warnings.length > 0 && (
+        <div className="warnings-row">
+          {warnings.map((w, i) => (
+            <span className="warning-chip" key={i}>{warningText(w)}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Chart */}
+      <ChartPanel spec={chart} rows={rows} />
+
+      {/* Data table */}
+      <DataTable rows={rows} />
+
+      {/* Evidence */}
+      <EvidenceSection items={citations} />
+
+      {/* Agent timeline */}
+      <AgentTimeline items={timeline} open={timelineOpen} onToggle={onToggleTimeline} />
+    </div>
+  );
+}
+
+type HistorySessionGroup = {
+  sessionId: string;
+  firstQuestion: string;
+  turnCount: number;
+  earliestAt: string;
+  latestAt: string;
+  hasFailure: boolean;
+};
+
+function groupHistoryBySession(items: HistoryItem[]): HistorySessionGroup[] {
+  const groups = new Map<string, HistorySessionGroup>();
+  for (const item of items) {
+    const sessionId = item.session_id;
+    if (!sessionId) continue;
+    const createdAt = item.created_at ?? "";
+    const existing = groups.get(sessionId);
+    if (!existing) {
+      groups.set(sessionId, {
+        sessionId,
+        firstQuestion: item.question ?? "(no question)",
+        turnCount: 1,
+        earliestAt: createdAt,
+        latestAt: createdAt,
+        hasFailure: item.status === "failed",
+      });
+      continue;
+    }
+    existing.turnCount += 1;
+    existing.hasFailure = existing.hasFailure || item.status === "failed";
+    if (createdAt > existing.latestAt) existing.latestAt = createdAt;
+    if (createdAt && (!existing.earliestAt || createdAt < existing.earliestAt)) {
+      existing.earliestAt = createdAt;
+      existing.firstQuestion = item.question ?? existing.firstQuestion;
+    }
+  }
+  return Array.from(groups.values()).sort((a, b) => (a.latestAt < b.latestAt ? 1 : -1));
+}
+
+// FR-FV10-054's own note: "the previous session's history remains queryable
+// via the existing chat-history endpoint" — that endpoint existed, but
+// nothing in the UI ever called it. This panel is the missing surface.
+function HistoryPanel({
+  state,
+  items,
+  activeSessionId,
+  onClose,
+  onResume,
+}: {
+  state: ApiState;
+  items: HistoryItem[];
+  activeSessionId: string;
+  onClose: () => void;
+  onResume: (sessionId: string) => void;
+}) {
+  const sessions = groupHistoryBySession(items);
+  return (
+    <div className="history-overlay" onClick={onClose}>
+      <div className="history-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="history-panel-header">
+          <p className="history-panel-title">Chat history</p>
+          <button className="history-close-btn" type="button" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="history-panel-body">
+          {state === "loading" && <p className="history-empty">Loading…</p>}
+          {state === "error" && <p className="history-empty">Couldn't load history. Try again.</p>}
+          {state === "success" && sessions.length === 0 && (
+            <p className="history-empty">No past sessions yet.</p>
+          )}
+          {sessions.map((session) => (
+            <button
+              key={session.sessionId}
+              type="button"
+              className={`history-session-row ${session.sessionId === activeSessionId ? "active" : ""}`}
+              onClick={() => onResume(session.sessionId)}
+            >
+              <p className="history-session-question">{session.firstQuestion}</p>
+              <p className="history-session-meta">
+                <code>{session.sessionId}</code>
+                <span>{session.turnCount} turn{session.turnCount > 1 ? "s" : ""}</span>
+                {session.hasFailure && <span className="history-session-failed">had errors</span>}
+              </p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -625,20 +1321,23 @@ export default function App() {
   const [role, setRole] = useState("analyst");
   const [locale, setLocale] = useState("en");
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0]);
-  const [chatState, setChatState] = useState<ApiState>("idle");
-  const [chatErrorCode, setChatErrorCode] = useState("");
-  const [chatResponse, setChatResponse] = useState<ChatResponse | undefined>();
-  const [chatError, setChatError] = useState("");
+  const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [timelineOpen, setTimelineOpen] = useState(true);
   const [devOpen, setDevOpen] = useState(false);
   const [adminPayload, setAdminPayload] = useState<unknown>(null);
   const [adminState, setAdminState] = useState<ApiState>("idle");
-  const [activeTab, setActiveTab] = useState<"chat" | "admin">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "admin" | "files">("chat");
+  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyState, setHistoryState] = useState<ApiState>("idle");
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
 
-  const sessionId = useRef(newSessionId()).current;
+  const [sessionId, setSessionId] = useState(newSessionId());
   const isAdmin = role === "admin";
 
   const isLoggedIn = Boolean(token);
+  const lastTurn = messages[messages.length - 1];
+  const chatState: ApiState = lastTurn?.state ?? "idle";
 
   function handleLoginSuccess(newToken: string, email: string) {
     setToken(newToken);
@@ -648,36 +1347,111 @@ export default function App() {
   function handleLogout() {
     setToken("");
     setUserEmail("");
-    setChatState("idle");
-    setChatResponse(undefined);
+    setMessages([]);
+  }
+
+  // FR-FV10-054 / design §7: a fresh session_id and a visually empty thread —
+  // the previous session's history is not deleted, just no longer shown.
+  // File selection is scoped to "this session" (design §7), so it clears
+  // too: the backend has no active file_ids for a session_id it has never
+  // seen, and leaving the checkboxes ticked would visually lie about that.
+  function startNewChat() {
+    setSessionId(newSessionId());
+    setMessages([]);
+    setSelectedFileIds([]);
+  }
+
+  async function openHistory() {
+    setHistoryOpen(true);
+    setHistoryState("loading");
+    try {
+      const payload = await getJson<{ data?: { items?: HistoryItem[] } }>(
+        `/api/v2/chat/history?user_id=${encodeURIComponent(userEmail)}`,
+        token
+      );
+      setHistoryItems(payload.data?.items ?? []);
+      setHistoryState("success");
+    } catch {
+      setHistoryState("error");
+    }
+  }
+
+  // A history item is a lightweight summary (question/answer_text/status),
+  // not the full original response envelope — table/chart/evidence/timeline
+  // are not persisted for replay, so a resumed turn just won't show them.
+  // Resuming still switches the active session_id, so new follow-up
+  // questions land in the same backend session (file-attachment stickiness
+  // and conversation context both key off session_id, per FR-FV10-055/052).
+  function resumeHistorySession(targetSessionId: string) {
+    const sessionTurns = historyItems
+      .filter((item) => item.session_id === targetSessionId)
+      .slice()
+      .reverse()
+      .map((item): ChatTurn => ({
+        id: item.trace_id ?? requestIdStr(),
+        question: item.question ?? "",
+        state: item.status === "failed" ? "error" : "success",
+        errorCode: item.error_code ?? "",
+        error: item.status === "failed" ? item.error_code ?? "This question failed." : "",
+        response: {
+          trace_id: item.trace_id,
+          data: { answer_text: item.answer_text, sql: item.sql_text },
+        },
+      }));
+    setSessionId(targetSessionId);
+    setMessages(sessionTurns);
+    setSelectedFileIds([]);
+    setHistoryOpen(false);
+  }
+
+  function toggleFileSelection(fileId: string) {
+    setSelectedFileIds((prev) =>
+      prev.includes(fileId) ? prev.filter((id) => id !== fileId) : [...prev, fileId]
+    );
   }
 
   async function submitQuestion(e: FormEvent) {
     e.preventDefault();
     if (!question.trim()) return;
-    setChatState("loading");
-    setChatError("");
-    setChatErrorCode("");
-    setChatResponse(undefined);
+    const turnId = requestIdStr();
+    const askedQuestion = question;
+    setMessages((prev) => [
+      ...prev,
+      { id: turnId, question: askedQuestion, state: "loading", errorCode: "", error: "" },
+    ]);
     try {
       const payload = await postJson<ChatResponse>(
         "/api/v2/chat/query",
-        { request_id: requestIdStr(), user_id: userEmail || "frontend-user", session_id: sessionId, question, locale, role },
+        {
+          request_id: requestIdStr(),
+          user_id: userEmail || "frontend-user",
+          session_id: sessionId,
+          question: askedQuestion,
+          locale,
+          role,
+          file_ids: selectedFileIds,
+        },
         token
       );
-      setChatResponse(payload);
-      if (payload.error) {
-        setChatState("error");
-        setChatErrorCode(payload.error.code ?? "");
-        setChatError(payload.error.message ?? payload.error.code ?? "An error occurred.");
-      } else {
-        setChatState("success");
-      }
+      const nextState: ApiState = payload.error ? "error" : "success";
+      const nextErrorCode = payload.error?.code ?? "";
+      const nextError = payload.error ? payload.error.message ?? payload.error.code ?? "An error occurred." : "";
+      setMessages((prev) =>
+        prev.map((turn) =>
+          turn.id === turnId
+            ? { ...turn, state: nextState, response: payload, errorCode: nextErrorCode, error: nextError }
+            : turn
+        )
+      );
     } catch (err) {
-      setChatState("error");
       const e = err as Error & { errorCode?: string };
-      setChatErrorCode(e.errorCode ?? "");
-      setChatError(e.message || String(err));
+      setMessages((prev) =>
+        prev.map((turn) =>
+          turn.id === turnId
+            ? { ...turn, state: "error", errorCode: e.errorCode ?? "", error: e.message || String(err) }
+            : turn
+        )
+      );
     }
   }
 
@@ -697,14 +1471,6 @@ export default function App() {
   if (!isLoggedIn) {
     return <LoginScreen onSuccess={handleLoginSuccess} />;
   }
-
-  const answer = resolveAnswer(chatResponse);
-  const rows = resolveRows(chatResponse);
-  const citations = resolveCitations(chatResponse);
-  const chart = resolveChart(chatResponse);
-  const timeline = resolveTimeline(chatResponse);
-  const warnings = chatResponse?.warnings ?? [];
-  const traceId = chatResponse?.trace_id;
 
   const roleBadgeClass = role === "admin" ? "role-badge admin" : "role-badge analyst";
 
@@ -739,6 +1505,25 @@ export default function App() {
       <div className="app-body">
         {/* ── Sidebar ── */}
         <aside className="sidebar">
+          <div className="sidebar-block sidebar-block-row">
+            <button
+              className="new-chat-btn"
+              type="button"
+              onClick={startNewChat}
+              disabled={messages.length === 0}
+              title="Start a new session — this session's history stays available in chat history."
+            >
+              + New chat
+            </button>
+            <button
+              className="history-btn"
+              type="button"
+              onClick={openHistory}
+              title="Browse past sessions and resume one."
+            >
+              History
+            </button>
+          </div>
           <div className="sidebar-block">
             <p className="sidebar-label">Quick questions</p>
             <div className="question-chips">
@@ -776,6 +1561,7 @@ export default function App() {
               Load admin summary
             </button>
           </div>
+          <FilesPanel token={token} selectedFileIds={selectedFileIds} onToggleFile={toggleFileSelection} />
         </aside>
 
         {/* ── Main content ── */}
@@ -797,12 +1583,24 @@ export default function App() {
               >
                 Admin Audit
               </button>
+              <button
+                className={`tab-btn ${activeTab === "files" ? "active" : ""}`}
+                type="button"
+                onClick={() => setActiveTab("files")}
+              >
+                Files Review
+              </button>
             </div>
           )}
 
           {/* Admin dashboard */}
           {activeTab === "admin" && isAdmin && (
             <AdminDashboard token={token} />
+          )}
+
+          {/* Admin files review */}
+          {activeTab === "files" && isAdmin && (
+            <AdminFilesPanel token={token} />
           )}
 
           {/* Question form + answer — hidden when admin tab active */}
@@ -831,85 +1629,25 @@ export default function App() {
                 ) : "Run query"}
               </button>
             </div>
-            <p className="question-hint">⌘ Enter to run · Role: <strong>{role}</strong></p>
+            <p className="question-hint">
+              ⌘ Enter to run · Role: <strong>{role}</strong>
+              {selectedFileIds.length > 0 && (
+                <span className="attached-files-chip">📎 {selectedFileIds.length} file{selectedFileIds.length > 1 ? "s" : ""} attached</span>
+              )}
+            </p>
           </form>
 
-          {/* Answer area */}
-          {chatState !== "idle" && (
-            <div className="answer-area">
-              {/* Header bar */}
-              <div className={`answer-header ${chatState}`}>
-                <div className="answer-header-left">
-                  <span className="answer-label">Answer</span>
-                  {traceId && <code className="trace-chip">{traceId}</code>}
-                </div>
-                <StatusBadge status={chatState === "loading" ? "running" : chatState === "error" ? "error" : "succeeded"} />
-              </div>
-
-              {/* Error */}
-              {chatState === "error" && chatError && (
-                chatErrorCode === "SQL_GUARDRAIL_BLOCKED" ? (
-                  <div className="answer-blocked">
-                    <div className="blocked-icon">⊘</div>
-                    <div className="blocked-body">
-                      <p className="blocked-title">Query blocked — data modifications are not permitted</p>
-                      <p className="blocked-desc">
-                        ChatBI is a read-only analytics platform. Requests to insert, update, delete,
-                        or otherwise modify data are automatically rejected by the security guardrail.
-                        If you have a legitimate data correction request, contact your data team directly.
-                      </p>
-                    </div>
-                  </div>
-                ) : chatErrorCode === "VALIDATION_ERROR" ? (
-                  <div className="answer-blocked answer-blocked--warn">
-                    <div className="blocked-icon">⚠</div>
-                    <div className="blocked-body">
-                      <p className="blocked-title">Request rejected — invalid query format</p>
-                      <p className="blocked-desc">{chatError}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="answer-error">
-                    {chatErrorCode && <span className="answer-error-code">{chatErrorCode}</span>}
-                    {chatError}
-                  </div>
-                )
-              )}
-
-              {/* Loading skeleton */}
-              {chatState === "loading" && (
-                <div className="loading-area">
-                  <div className="skeleton-line long" />
-                  <div className="skeleton-line medium" />
-                  <div className="skeleton-line short" />
-                </div>
-              )}
-
-              {/* Answer text */}
-              {answer && chatState !== "loading" && (
-                <p className="answer-text">{answer}</p>
-              )}
-
-              {/* Warnings */}
-              {warnings.length > 0 && (
-                <div className="warnings-row">
-                  {warnings.map((w, i) => (
-                    <span className="warning-chip" key={i}>{warningText(w)}</span>
-                  ))}
-                </div>
-              )}
-
-              {/* Chart */}
-              <ChartPanel spec={chart} rows={rows} />
-
-              {/* Data table */}
-              <DataTable rows={rows} />
-
-              {/* Evidence */}
-              <EvidenceSection items={citations} />
-
-              {/* Agent timeline */}
-              <AgentTimeline items={timeline} open={timelineOpen} onToggle={() => setTimelineOpen(!timelineOpen)} />
+          {/* Conversation thread — every turn in this session, appended (FR-FV10-054) */}
+          {messages.length > 0 && (
+            <div className="chat-thread">
+              {messages.map((turn) => (
+                <ChatTurnCard
+                  key={turn.id}
+                  turn={turn}
+                  timelineOpen={timelineOpen}
+                  onToggleTimeline={() => setTimelineOpen(!timelineOpen)}
+                />
+              ))}
             </div>
           )}
           </div>
@@ -932,7 +1670,7 @@ export default function App() {
             <div className="dev-cols">
               <div>
                 <p className="dev-section-label">Last query trace</p>
-                <pre className="dev-pre">{chatResponse ? JSON.stringify(chatResponse, null, 2) : "Run a query first."}</pre>
+                <pre className="dev-pre">{lastTurn?.response ? JSON.stringify(lastTurn.response, null, 2) : "Run a query first."}</pre>
               </div>
               <div>
                 <p className="dev-section-label">
@@ -945,6 +1683,16 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {historyOpen && (
+        <HistoryPanel
+          state={historyState}
+          items={historyItems}
+          activeSessionId={sessionId}
+          onClose={() => setHistoryOpen(false)}
+          onResume={resumeHistorySession}
+        />
+      )}
     </div>
   );
 }

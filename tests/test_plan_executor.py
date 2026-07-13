@@ -58,7 +58,7 @@ class FlakyRunner:
 
 def test_plan_executor_aggregates_successful_agent_outputs() -> None:
     trace_id = new_trace_id()
-    plan = ExecutionPlanBuilder().build(TaskType.CHART)
+    plan = ExecutionPlanBuilder().build(frozenset({TaskType.SQL_QUERY, TaskType.CHART}))
     executor = PlanExecutor()
 
     result = executor.execute(
@@ -85,7 +85,7 @@ def test_plan_executor_skips_fanout_when_sql_times_out() -> None:
     trace_id = new_trace_id()
     trace_log = InMemoryAgentTraceLog()
     state_store = InMemoryOrchestrationStateStore()
-    plan = ExecutionPlanBuilder().build(TaskType.CHART)
+    plan = ExecutionPlanBuilder().build(frozenset({TaskType.SQL_QUERY, TaskType.CHART}))
     executor = PlanExecutor(
         tracer=AgentStepTracer(trace_log),
         state_store=state_store,
@@ -128,7 +128,7 @@ def test_plan_executor_skips_fanout_when_sql_times_out() -> None:
 def test_plan_executor_does_not_start_visualization_when_sql_guardrail_denies() -> None:
     trace_id = new_trace_id()
     trace_log = InMemoryAgentTraceLog()
-    plan = ExecutionPlanBuilder().build(TaskType.CHART)
+    plan = ExecutionPlanBuilder().build(frozenset({TaskType.SQL_QUERY, TaskType.CHART}))
     visualization_runner = CountingRunner(
         AgentRunResult(payload={"chart": "line"}, confidence=0.9)
     )
@@ -166,7 +166,7 @@ def test_plan_executor_does_not_start_visualization_when_sql_guardrail_denies() 
 
 def test_plan_executor_returns_degraded_result_when_fanout_fails() -> None:
     trace_id = new_trace_id()
-    plan = ExecutionPlanBuilder().build(TaskType.ANALYTICS)
+    plan = ExecutionPlanBuilder().build(frozenset({TaskType.SQL_QUERY, TaskType.ANALYTICS}))
     executor = PlanExecutor()
 
     result = executor.execute(
@@ -204,7 +204,7 @@ def _assert_optional_fanout_failure_degrades(
     failing_agent: AgentName,
 ) -> None:
     trace_id = new_trace_id()
-    plan = ExecutionPlanBuilder().build(task_type)
+    plan = ExecutionPlanBuilder().build(frozenset({TaskType.SQL_QUERY, task_type}))
     executor = PlanExecutor()
 
     result = executor.execute(
@@ -231,7 +231,7 @@ def _assert_optional_fanout_failure_degrades(
 
 def test_plan_executor_degrades_rag_failure_and_still_runs_verifier() -> None:
     trace_id = new_trace_id()
-    plan = ExecutionPlanBuilder().build(TaskType.RAG_EXPLANATION)
+    plan = ExecutionPlanBuilder().build(frozenset({TaskType.SQL_QUERY, TaskType.RAG_EXPLANATION}))
     executor = PlanExecutor()
 
     result = executor.execute(

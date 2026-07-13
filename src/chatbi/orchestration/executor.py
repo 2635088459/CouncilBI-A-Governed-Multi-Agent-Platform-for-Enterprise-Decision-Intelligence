@@ -58,6 +58,7 @@ AGENT_STEP_NAMES: dict[AgentName, AgentStepName] = {
     AgentName.ANALYTICS: AgentStepName.ANALYTICS,
     AgentName.RAG: AgentStepName.RAG,
     AgentName.VERIFIER: AgentStepName.VERIFIER,
+    AgentName.FILE_DATA: AgentStepName.FILE_DATA,
 }
 
 

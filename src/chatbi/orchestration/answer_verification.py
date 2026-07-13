@@ -33,10 +33,15 @@ class AnswerAssemblyVerifier:
         findings: list[str] = []
         if not answer.answer_text.strip():
             findings.append("answer_text is required.")
-        if not answer.sql_text.strip():
-            findings.append("sql_text is required.")
-        if not answer.table_result.columns:
-            findings.append("table_result.columns is required.")
+        # A document-only answer (e.g. a pure RAG explanation with no SQL
+        # step planned) is grounded in evidence_list instead of a SQL
+        # result set — only require the SQL-shaped fields when there is no
+        # evidence to fall back on.
+        if not answer.evidence_list:
+            if not answer.sql_text.strip():
+                findings.append("sql_text is required.")
+            if not answer.table_result.columns:
+                findings.append("table_result.columns is required.")
         if not answer.trace_id.strip():
             findings.append("trace_id is required.")
         return tuple(findings)

@@ -50,7 +50,13 @@ class MockLLMProvider:
 
     def _text_for(self, request: LLMRequest) -> str:
         if request.task_type == "sql_generation":
-            content = " ".join(message.get("content", "") for message in request.messages).lower()
+            # Keyed off the user's actual question only, not the full
+            # joined message list — the system prompt now describes the
+            # real schema (simple_orchestrator.py's _SQL_GENERATION_SYSTEM_PROMPT),
+            # which itself always contains "support_ticket_summary", so
+            # joining it in here would make this branch fire for every
+            # question, not just ticket-related ones.
+            content = self._last_user_content(request).lower()
             if "support" in content or "ticket" in content:
                 return (
                     "SELECT month, product, severity, ticket_count, avg_resolution_hours "

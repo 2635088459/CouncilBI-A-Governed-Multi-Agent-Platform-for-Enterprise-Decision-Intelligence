@@ -45,6 +45,10 @@ class ApiErrorCode(StrEnum):
     AUTH_FORBIDDEN = "AUTH_FORBIDDEN"
     REQ_INVALID_ARGUMENT = "REQ_INVALID_ARGUMENT"
     SQL_GUARDRAIL_BLOCKED = "SQL_GUARDRAIL_BLOCKED"
+    # 10-followups/13: distinct from SQL_GUARDRAIL_BLOCKED — the model's
+    # output wasn't a recognizable read-only query (no dangerous keyword was
+    # involved), so this must not be presented as a data-modification denial.
+    SQL_NOT_QUERYABLE = "SQL_NOT_QUERYABLE"
     QUERY_TIMEOUT = "QUERY_TIMEOUT"
     AGENT_PARTIAL_FAILURE = "AGENT_PARTIAL_FAILURE"
     RATE_LIMITED = "RATE_LIMITED"
@@ -338,6 +342,8 @@ def error_envelope(
 
 
 def api_error_for_warning(warning: WarningMessage) -> ApiErrorCode:
+    if warning.code is ErrorCode.SQL_DENY_UNRECOGNIZED_OUTPUT:
+        return ApiErrorCode.SQL_NOT_QUERYABLE
     if warning.code in {
         ErrorCode.SQL_DENY_STATEMENT,
         ErrorCode.SQL_DENY_OBJECT,

@@ -27,34 +27,34 @@ A single upload session can contain both types.
 
 ```mermaid
 flowchart TD
-    subgraph Browser
-        U[User] -->|selects file| FU[File Upload UI]
-        FU -->|multipart POST| API[/api/v2/files/upload]
+    subgraph Browser["Browser"]
+        U["User"] -->|"selects file"| FU["File Upload UI"]
+        FU -->|"multipart POST"| API["POST /api/v2/files/upload"]
     end
 
-    subgraph Upload Pipeline
-        API --> AV[Format Validation & AV Scan]
-        AV --> OBJ[(Object Storage\nMinIO / S3)]
-        AV --> META[(files metadata\nPostgres)]
-        AV --> PARSE{File Type?}
-        PARSE -->|Structured| SCHEMA[Schema Inference\nDuckDB / Pandas]
-        PARSE -->|Unstructured| CHUNK[Text Extract & Chunk]
+    subgraph UploadPipeline["Upload Pipeline"]
+        API --> AV["Format Validation and AV Scan"]
+        AV --> OBJ[("Object Storage MinIO/S3")]
+        AV --> META[("files metadata Postgres")]
+        AV --> PARSE{"File Type?"}
+        PARSE -->|"Structured"| SCHEMA["Schema Inference DuckDB/Pandas"]
+        PARSE -->|"Unstructured"| CHUNK["Text Extract and Chunk"]
         SCHEMA --> META
-        CHUNK --> EMB[Embedding Service]
-        EMB --> VEC[(Vector Store\npgvector)]
+        CHUNK --> EMB["Embedding Service"]
+        EMB --> VEC[("Vector Store pgvector")]
     end
 
-    subgraph Query Time
-        Q[User Question\n+ file_ids] --> ORCH[Orchestrator]
-        ORCH --> CLASSIFY[QuestionClassifier\ndetects FILE_DATA intent]
-        CLASSIFY --> FILEAGENT[FileDataAgent\nDuckDB query]
-        CLASSIFY --> SQLAGENT[SQL Agent\nPostgres query]
-        CLASSIFY --> RAGAGENT[RAG Agent\nvector retrieval]
-        FILEAGENT --> MERGE[Result Merger]
+    subgraph QueryTime["Query Time"]
+        Q["User Question with file_ids"] --> ORCH["Orchestrator"]
+        ORCH --> CLASSIFY["QuestionClassifier detects FILE_DATA intent"]
+        CLASSIFY --> FILEAGENT["FileDataAgent DuckDB query"]
+        CLASSIFY --> SQLAGENT["SQL Agent Postgres query"]
+        CLASSIFY --> RAGAGENT["RAG Agent vector retrieval"]
+        FILEAGENT --> MERGE["Result Merger"]
         SQLAGENT --> MERGE
         RAGAGENT --> MERGE
-        MERGE --> LLM[LLM Synthesis]
-        LLM --> ANS[Answer + Evidence]
+        MERGE --> LLM["LLM Synthesis"]
+        LLM --> ANS["Answer + Evidence"]
     end
 
     META --> FILEAGENT
@@ -229,11 +229,11 @@ PDF, DOCX, and similar files follow the same ingestion pipeline as existing RAG 
 
 ```mermaid
 flowchart LR
-    FILE[Uploaded PDF / DOCX] --> EXTRACT[Text Extraction\ntika / pdfminer]
-    EXTRACT --> CLEAN[Clean & Normalize]
-    CLEAN --> CHUNK[Sentence-Aware Chunker\n300–500 tokens, 50-token overlap]
-    CHUNK --> EMB[Embedding Model]
-    EMB --> STORE[(pgvector\nwith user_id + file_id scope filter)]
+    FILE["Uploaded PDF/DOCX"] --> EXTRACT["Text Extraction tika/pdfminer"]
+    EXTRACT --> CLEAN["Clean and Normalize"]
+    CLEAN --> CHUNK["Sentence-Aware Chunker 300-500 tokens 50-token overlap"]
+    CHUNK --> EMB["Embedding Model"]
+    EMB --> STORE[("pgvector with user_id and file_id scope filter")]
 ```
 
 At retrieval time, the RAG agent applies a metadata filter `user_id = current_user AND file_id IN request_file_ids` before performing vector similarity search.
@@ -464,16 +464,16 @@ A new `FederatedQueryAgent` replaces the narration fallback when the question ex
 
 ```mermaid
 flowchart TD
-    ORCH[Orchestrator] -->|FILE_DATA + SQL_QUERY detected| FED[FederatedQueryAgent]
-    FED --> PG[Pre-query Postgres\nmaterialize ≤200K rows to memory]
-    FED --> FILE[Load Parquet from object storage]
-    PG --> DUCK[DuckDB federated session]
+    ORCH["Orchestrator"] -->|"FILE_DATA + SQL_QUERY detected"| FED["FederatedQueryAgent"]
+    FED --> PG["Pre-query Postgres materialize up to 200K rows to memory"]
+    FED --> FILE["Load Parquet from object storage"]
+    PG --> DUCK["DuckDB federated session"]
     FILE --> DUCK
-    DUCK --> SCHEMA_CTX[Build combined schema context]
-    SCHEMA_CTX --> LLM_SQL[LLM generates cross-source DuckDB SQL\ndb_{table} JOIN file_{file_id}]
-    LLM_SQL --> GUARD[Guardrail check\nsame rules as SQL Agent]
-    GUARD --> EXEC[DuckDB executes]
-    EXEC --> RESULT[TableResult]
+    DUCK --> SCHEMA_CTX["Build combined schema context"]
+    SCHEMA_CTX --> LLM_SQL["LLM generates cross-source DuckDB SQL db_table JOIN file_id"]
+    LLM_SQL --> GUARD["Guardrail check same rules as SQL Agent"]
+    GUARD --> EXEC["DuckDB executes"]
+    EXEC --> RESULT["TableResult"]
 ```
 
 **Naming convention inside the DuckDB session**:
@@ -574,3 +574,7 @@ WHERE file_id = 'ufile_abc123';
 | Large file upload | Client-side chunking, direct to object storage + streaming post-processing | Per-role size tiers; streaming keeps UI responsive |
 | Cross-source JOIN | FederatedQueryAgent + DuckDB federated session | Postgres materialize cap 200K rows; auto-degrade |
 | Knowledge base promotion | Admin one-click promote + vector store copy + bidirectional trace | Promoted doc and source file have independent lifecycles |
+
+## 13. Follow-Up Designs
+
+Post-implementation review found a real cross-tenant data leak in the RAG knowledge base and refined the sharing/retention model further. See [10-followups/](10-followups/README.en.md) for the RAG per-user isolation fix, the corrected admin-approval sharing workflow, the retention/auto-archival redesign, and a multi-turn conversation memory design.

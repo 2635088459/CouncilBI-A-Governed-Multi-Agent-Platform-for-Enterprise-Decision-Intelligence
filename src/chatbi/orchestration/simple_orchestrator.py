@@ -32,7 +32,11 @@ from chatbi.core.contracts import (
 from chatbi.governance import InMemoryGuardrailAuditLog, ReadOnlyQueryResult
 from chatbi.governance.audit import GuardrailAuditLog
 from chatbi.governance.simple_guardrail import SimpleSqlGuardrail
-from chatbi.history.in_memory import InMemoryQueryHistory
+from chatbi.history.in_memory import (
+    InMemoryQueryHistory,
+    conversation_context_text,
+    conversation_messages,
+)
 from chatbi.knowledge import InMemoryKnowledgeStore
 from chatbi.llm import LLMClient, LLMProviderError, LLMRequest, LLMTimeoutError
 from chatbi.orchestration.answer_verification import AnswerAssemblyVerifier
@@ -41,9 +45,63 @@ from chatbi.orchestration.executor import (
     PlanExecutor,
     PlanExecutionResult,
 )
-from chatbi.orchestration.routing import ExecutionPlanBuilder, QuestionClassifier
+from chatbi.orchestration.routing import ExecutionPlanBuilder, QuestionClassifier, TaskType
 from chatbi.orchestration.state import OrchestrationRequestState, RequestStateStage
 from chatbi.trace_events import InMemoryTraceEventStore, TraceEvent, TraceEventRecorder, TraceEventStatus
+
+
+# Static description of the actual seeded `business` schema (verified live
+# against the running Postgres instance, not the aspirational catalog in
+# chatbi.data_model — see business_table_catalog.py's own docstring for why
+# that catalog's table names don't match what this project deploys). The
+# main orchestrator had no schema-awareness at all in its LLM-generation
+# fallback before this: for any question not matched by _build_sql_candidate's
+# own hardcoded shortcuts above, the model had to guess table/column names
+# from scratch, and a real GPT model observed to do so wrapped its guess in
+# prose and a markdown fence instead of bare SQL — both of which the
+# guardrail's "must start with SELECT" check rejected outright, regardless
+# of whether the guessed schema was even right.
+#
+# Deliberately omits business.campaigns even though it exists live: this
+# orchestrator's default guardrail (SimpleSqlGuardrail -> SqlObjectAccessPolicy)
+# allow-lists tables by name against chatbi.data_model's DataModelCatalog,
+# whose business tables are named "marketing_campaigns", not "campaigns" —
+# a table-name mismatch pre-dating this fix, the same class of "aspirational
+# vs. deployed schema" problem business_table_catalog.py's own docstring
+# already documents for a different code path. Hinting "campaigns" here
+# would just teach the model to write a query the guardrail then denies for
+# an unrelated, pre-existing reason. Fixing that mismatch is a separate,
+# governance-layer change, not part of this prompt fix.
+_SQL_GENERATION_SYSTEM_PROMPT = (
+    "You are a DuckDB/Postgres-compatible SQL generator for the governed "
+    "ChatBI schema. Reply with exactly one read-only SQL statement and "
+    "nothing else: no explanation, no markdown code fences, no prose. "
+    "A `WITH ... AS (...) SELECT ...` common table expression is allowed "
+    "as long as the statement is a single read-only query.\n\n"
+    # Table names are unprefixed, matching the readonly DB role's
+    # `search_path = business, public` (src/chatbi/migrations.py) — the
+    # same convention _build_sql_candidate's own hardcoded shortcuts above
+    # already use (e.g. "FROM revenue_by_month", not "FROM business.revenue_by_month").
+    "Available tables:\n"
+    "revenue_by_month(month VARCHAR, revenue NUMERIC)\n"
+    "support_ticket_summary(month VARCHAR, product VARCHAR, severity VARCHAR, "
+    "ticket_count INTEGER, avg_resolution_hours NUMERIC)"
+)
+
+_SQL_FENCE_PATTERN = re.compile(r"```(?:sql)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+
+
+def _strip_sql_fencing(response_text: str) -> str:
+    """Best-effort cleanup for a model that ignored the "no prose, no
+    fences" instruction anyway: prefer the contents of a ```sql fenced
+    block if one is present, otherwise fall back to the raw stripped text
+    (unchanged from this function's pre-existing behavior) so a model that
+    already replies with bare SQL is not affected."""
+
+    fence_match = _SQL_FENCE_PATTERN.search(response_text)
+    if fence_match is not None:
+        return fence_match.group(1).strip()
+    return response_text.strip()
 
 
 def _is_str_tuple(value: object) -> TypeGuard[tuple[str, ...]]:
@@ -85,6 +143,7 @@ class SimpleOrchestrator:
         llm_client: LLMClient | None = None,
         answer_synthesizer: GroundedAnswerSynthesizer | None = None,
         org_id: str = "org_default",
+        conversation_context_turns: int = 5,
     ) -> None:
         self._guardrail_audit_log = guardrail_audit_log or InMemoryGuardrailAuditLog()
         self._guardrail = guardrail or SimpleSqlGuardrail(audit_log=self._guardrail_audit_log)
@@ -105,6 +164,7 @@ class SimpleOrchestrator:
         self._llm_client = llm_client
         self._answer_synthesizer = answer_synthesizer or GroundedAnswerSynthesizer(llm_client)
         self._org_id = org_id
+        self._conversation_context_turns = conversation_context_turns
 
     @property
     def history(self) -> InMemoryQueryHistory:
@@ -117,6 +177,14 @@ class SimpleOrchestrator:
     @property
     def trace_event_store(self) -> InMemoryTraceEventStore:
         return self._trace_event_recorder.store
+
+    @property
+    def knowledge_store(self) -> InMemoryKnowledgeStore | None:
+        return self._knowledge_store
+
+    @property
+    def analytics_service(self) -> AnalyticsService:
+        return self._analytics_service
 
     def answer(self, request: QueryRequest, trace_id: str | None = None) -> QueryAnswer:
         active_trace_id = trace_id or new_trace_id()
@@ -184,7 +252,23 @@ class SimpleOrchestrator:
         return answer
 
     def _answer_with_active_trace(self, request: QueryRequest, active_trace_id: str) -> QueryAnswer:
-        if not self._is_supported_question(request.question):
+        # FR-FV10-051/052: the session's recent turns, resolved once per
+        # request and threaded into every LLM call this pipeline makes
+        # (SQL generation, RAG retrieval, answer synthesis) — the sole
+        # mechanism for resolving follow-up references (FR-FV10-056).
+        # Empty for a brand-new session, so a first turn pays no extra cost
+        # (NFR-FV10-018).
+        history_turns = self._history.list_by_session(
+            request.session_id, limit=self._conversation_context_turns
+        )
+        conversation_messages_tuple = conversation_messages(history_turns)
+        conversation_context = conversation_context_text(history_turns)
+
+        # FR-FV10-056: a follow-up like "what about last month?" carries no
+        # domain keyword of its own — it is only answerable in light of the
+        # session's prior turns, so the keyword gate below only rejects a
+        # question when there is no history to fall back on.
+        if not history_turns and not self._is_supported_question(request.question):
             answer = self._build_denied_answer(
                 request=request,
                 trace_id=active_trace_id,
@@ -205,7 +289,18 @@ class SimpleOrchestrator:
             )
             return answer
 
-        sql_candidate, llm_warning = self._build_sql_candidate(request, active_trace_id)
+        # FR-FV10 routing extension: a document-only question (RAG keyword,
+        # no data-domain/chart/analytics signal) is classified without
+        # SQL_QUERY, so it skips SQL generation entirely instead of being
+        # gated behind a SQL call that has nothing to answer.
+        task_types = self._classifier.classify(request.question)
+        needs_sql = TaskType.SQL_QUERY in task_types
+        if needs_sql:
+            sql_candidate, llm_warning = self._build_sql_candidate(
+                request, active_trace_id, conversation_messages_tuple
+            )
+        else:
+            sql_candidate, llm_warning = "", None
         if llm_warning is not None:
             answer = self._build_denied_answer(
                 request=request,
@@ -223,7 +318,6 @@ class SimpleOrchestrator:
                 )
             )
             return answer
-        task_types = self._classifier.classify(request.question)
         plan = self._plan_builder.build(task_types)
         execution_result = self._plan_executor.execute(
             trace_id=active_trace_id,
@@ -232,6 +326,7 @@ class SimpleOrchestrator:
                 request=request,
                 trace_id=active_trace_id,
                 sql_candidate=sql_candidate,
+                conversation_context=conversation_context,
             ),
         )
 
@@ -254,11 +349,17 @@ class SimpleOrchestrator:
             )
             return answer
 
-        safe_sql = self._safe_sql_from_execution(execution_result, sql_candidate)
-        table_result, readonly_warning = self._table_result_for_safe_sql(
-            safe_sql,
-            question=request.question,
-        )
+        if needs_sql:
+            safe_sql = self._safe_sql_from_execution(execution_result, sql_candidate)
+            table_result, readonly_warning = self._table_result_for_safe_sql(
+                safe_sql,
+                question=request.question,
+            )
+        else:
+            # No SQL was planned for this document-only question — there is
+            # no query to run and no readonly-execution failure to report.
+            safe_sql = ""
+            table_result, readonly_warning = TableResult(columns=(), rows=()), None
         warnings = self._warnings_from_execution(execution_result)
         if readonly_warning is not None:
             warnings = (*warnings, readonly_warning)
@@ -281,6 +382,7 @@ class SimpleOrchestrator:
                 ),
                 evidence_uncertainty=self._evidence_uncertainty_from_execution(execution_result),
                 retrieval_stats=self._retrieval_stats_from_execution(execution_result),
+                conversation_messages_tuple=conversation_messages_tuple,
             )
         )
         self._history.save(
@@ -384,6 +486,7 @@ class SimpleOrchestrator:
         request: QueryRequest,
         trace_id: str,
         sql_candidate: str,
+        conversation_context: str = "",
     ) -> dict[
         AgentName,
         SqlAgentRunner
@@ -419,7 +522,9 @@ class SimpleOrchestrator:
                 evidence_items=self._fallback_evidence_items(),
                 knowledge_store=self._knowledge_store,
                 question=request.question,
+                requesting_user_id=request.user_id,
                 metric_context=sql_candidate,
+                conversation_context=conversation_context,
                 user_role=request.role.value,
                 trace_id=trace_id,
             ),
@@ -427,7 +532,11 @@ class SimpleOrchestrator:
                 verified=True,
                 confidence=0.9,
                 reason="Mock answer passes baseline verification.",
-                sql_text=sql_candidate,
+                # `sql_candidate` is "" for a document-only question with no
+                # SQL step planned (§needs_sql in _answer_with_active_trace)
+                # — None tells the verifier "not applicable" instead of
+                # "missing", so it doesn't flag an absence that is by design.
+                sql_text=sql_candidate or None,
             ),
         }
 
@@ -645,6 +754,7 @@ class SimpleOrchestrator:
         self,
         request: QueryRequest,
         trace_id: str,
+        conversation_messages_tuple: tuple[Mapping[str, str], ...] = (),
     ) -> tuple[str, WarningMessage | None]:
         stripped_question = request.question.strip()
         if self._looks_like_sql(stripped_question):
@@ -670,12 +780,16 @@ class SimpleOrchestrator:
 
         llm_request = LLMRequest(
             task_type="sql_generation",
-            prompt_version="sql_generation.v1",
+            prompt_version="sql_generation.v2",
             messages=(
                 {
                     "role": "system",
-                    "content": "Generate one read-only SQL SELECT statement for the governed ChatBI schema.",
+                    "content": _SQL_GENERATION_SYSTEM_PROMPT,
                 },
+                # FR-FV10-052/056: prior turns, prepended verbatim — the only
+                # mechanism used to resolve follow-up references before
+                # generating SQL, no separate rewrite call.
+                *conversation_messages_tuple,
                 {"role": "user", "content": request.question},
             ),
             model_policy={"requires_readonly_sql": True},
@@ -698,7 +812,7 @@ class SimpleOrchestrator:
                 message="SQL generation provider failed before execution.",
             )
 
-        return response.text.strip(), None
+        return _strip_sql_fencing(response.text), None
 
     def _is_support_ticket_table(self, table_result: TableResult) -> bool:
         return "ticket_count" in table_result.columns and (
@@ -782,6 +896,7 @@ class SimpleOrchestrator:
         evidence_list: tuple[EvidenceItem, ...],
         evidence_uncertainty: bool,
         retrieval_stats: RetrievalStats | None,
+        conversation_messages_tuple: tuple[Mapping[str, str], ...] = (),
     ) -> QueryAnswer:
         synthesis = self._answer_synthesizer.synthesize(
             question=question,
@@ -791,6 +906,7 @@ class SimpleOrchestrator:
             user_id=user_id,
             org_id=self._org_id,
             trace_id=trace_id,
+            conversation_context=conversation_messages_tuple,
         )
         return QueryAnswer(
             answer_text=synthesis.answer_text,

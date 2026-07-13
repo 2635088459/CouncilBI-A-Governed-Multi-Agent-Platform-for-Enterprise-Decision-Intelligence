@@ -28,6 +28,7 @@ from chatbi.api.http import _build_default_auth_service, create_app
 from chatbi.application.app import ChatBIApplication
 from chatbi.core.contracts import Locale, UserRole
 from chatbi.core.runtime_config import RuntimeConfig
+from chatbi.files import InMemoryFileRepository
 from chatbi.evaluation_repository import EvalRunRecord, EvalRunStatus, InMemoryEvaluationRepository
 from chatbi.governance import InMemoryGuardrailAuditLogV2
 from chatbi.history.request_metadata import InMemoryRequestMetadataStore, RequestMetadataRecord
@@ -126,6 +127,7 @@ def test_create_app_wires_postgres_auth_store_only_with_auth_connect() -> None:
         guardrail_audit_log_v2=InMemoryGuardrailAuditLogV2(),
         auth_connect=connect,
         use_postgres_metadata=True,
+        file_repository=InMemoryFileRepository(),
     )
 
     assert seen_urls == ["postgresql://chatbi:test@localhost:5432/chatbi"]

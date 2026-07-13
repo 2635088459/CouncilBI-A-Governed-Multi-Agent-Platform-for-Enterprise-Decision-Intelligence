@@ -28,7 +28,9 @@ from chatbi.governance import (
     InMemoryGuardrailAuditLogV2,
     RuleHit,
 )
+from chatbi.llm import LLMClient, LLMRequest, LLMResponse
 from chatbi.observability_logs import InMemoryObservabilityLogStore, ObservabilityLogger
+from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.orchestration.worker import AsyncTaskKind, AsyncTaskRequest, InMemoryWorkerHandoffQueue
 
 
@@ -181,6 +183,57 @@ def test_v2_chat_query_rejects_unsupported_text_without_revenue_rows() -> None:
     assert response_body["data"]["agent_timeline"][-1]["status"] == "not_planned"
 
 
+# 10-followups/13 (Spec FV10.13 §8.4, TC-FV10-214): a read-only, explanatory
+# question about a metric with no matching table generates a prose SQL
+# candidate, not a real write attempt — the response must be tagged
+# SQL_NOT_QUERYABLE, not the DML-flavored SQL_GUARDRAIL_BLOCKED.
+class _ProseForSqlGenerationLLMClient:
+    """Always answers a `sql_generation` request with prose, never SQL —
+    the failure mode `_SQL_GENERATION_SYSTEM_PROMPT`'s own comment
+    documents for a question about data the fallback schema doesn't have.
+    """
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        text = (
+            "I don't have a churn table to query against."
+            if request.task_type == "sql_generation"
+            else "ok"
+        )
+        return LLMResponse(
+            text=text,
+            model_name="test-stub",
+            provider="test",
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            estimated_cost=0.0,
+            latency_ms=1,
+            finish_reason="stop",
+        )
+
+
+def test_v2_chat_query_with_non_queryable_model_output_returns_sql_not_queryable() -> None:
+    orchestrator = SimpleOrchestrator(llm_client=_ProseForSqlGenerationLLMClient())
+    app = ChatBIApplication(orchestrator=orchestrator)
+    client: Any = TestClient(create_app(application=app))
+    body = valid_request_body()
+    body["request_id"] = "req_churn_audit_trail"
+    body["question"] = (
+        "What is the churn count for the enterprise segment in March 2026?"
+    )
+
+    response = client.post(
+        "/api/v2/chat/query",
+        headers=auth_headers(),
+        json=body,
+    )
+
+    response_body: dict[str, Any] = response.json()
+
+    assert response.status_code == 400
+    assert response_body["error"]["code"] == "SQL_NOT_QUERYABLE"
+
+
 def test_use_postgres_metadata_from_env_accepts_explicit_truthy_values() -> None:
     assert use_postgres_metadata_from_env({"CHATBI_USE_POSTGRES_METADATA": "1"}) is True
     assert use_postgres_metadata_from_env({"CHATBI_USE_POSTGRES_METADATA": "true"}) is True
@@ -325,6 +378,26 @@ def test_v2_chat_query_persists_runtime_query_result_with_public_trace_id() -> N
     assert record.user_id == "u_001"
     assert record.sql_text == "SELECT month, revenue FROM revenue_by_month LIMIT 100"
     assert record.table_result["columns"] == ("month", "revenue")
+
+
+def test_v2_chat_query_document_only_question_does_not_crash_runtime_result_persistence() -> None:
+    # FR-FV10-059/061 regression: a document-only question produces an
+    # empty sql_text. runtime_query_result_record_from_response() used to
+    # construct RuntimeQueryResultRecord(sql_text="") unconditionally, and
+    # that dataclass's __post_init__ raises ValueError("sql_text is
+    # required") — an unhandled 500, not a graceful "nothing to persist".
+    query_result_store = FakeRuntimeQueryResultStore()
+    client: Any = TestClient(create_app(runtime_query_result_store=query_result_store))
+    body = valid_request_body()
+    body["request_id"] = "req_docsonly12345"
+    body["session_id"] = "ses_docsonly12345"
+    body["question"] = "Explain what the onepager says about pricing."
+
+    response = client.post("/api/v2/chat/query", headers=auth_headers(), json=body)
+
+    assert response.status_code == 200
+    trace_id = response.json()["trace_id"]
+    assert query_result_store.get(trace_id) is None
 
 
 def test_v2_query_result_endpoint_returns_persisted_result_without_plaintext_sql() -> None:

@@ -189,6 +189,7 @@ def test_retrieval_excludes_out_of_permission_documents() -> None:
     result = store.retrieve(
         RetrievalQuery(
             question="Why did revenue drop?",
+            requesting_user_id="u_001",
             user_role="business_user",
             top_k=5,
         ),
@@ -217,6 +218,7 @@ def test_retrieval_returns_uncertainty_when_filters_remove_all_candidates() -> N
     result = store.retrieve(
         RetrievalQuery(
             question="Why did revenue drop?",
+            requesting_user_id="u_001",
             doc_type="incident",
         )
     )
@@ -252,6 +254,7 @@ def test_retrieval_merges_adjacent_chunks_from_same_document() -> None:
     result = store.retrieve(
         RetrievalQuery(
             question="Why did revenue drop after campaign spend paused?",
+            requesting_user_id="u_001",
             top_k=5,
         )
     )
@@ -262,3 +265,201 @@ def test_retrieval_merges_adjacent_chunks_from_same_document() -> None:
         "Revenue dropped after campaign spend paused. "
         "The pause reduced paid traffic and new orders."
     )
+
+
+def _owned_document_with_chunk(store: InMemoryKnowledgeStore, owner_user_id: str) -> KnowledgeDocument:
+    document = KnowledgeDocument(
+        source_id=f"doc_owned_by_{owner_user_id}",
+        title="Analyst's private runbook",
+        doc_type="report",
+        publish_time=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        owner_user_id=owner_user_id,
+    )
+    store.save_document(document)
+    store.save_chunk(
+        DocumentChunk(
+            chunk_id=f"chunk_owned_by_{owner_user_id}",
+            source_id=document.source_id,
+            chunk_index=1,
+            chunk_text="Escalate P1 incidents to the on-call engineer within 15 minutes.",
+        )
+    )
+    return document
+
+
+def test_retrieve_returns_document_owned_by_the_requesting_user() -> None:
+    # TC-FV10-107
+    store = InMemoryKnowledgeStore()
+    document = _owned_document_with_chunk(store, owner_user_id="U1")
+
+    result = store.retrieve(
+        RetrievalQuery(
+            question="Escalate P1 incidents to the on-call engineer",
+            requesting_user_id="U1",
+        )
+    )
+
+    assert tuple(item.source_id for item in result.evidence_list) == (document.source_id,)
+
+
+def test_retrieve_excludes_document_owned_by_a_different_user() -> None:
+    # TC-FV10-108 / NFR-FV10-011
+    store = InMemoryKnowledgeStore()
+    _owned_document_with_chunk(store, owner_user_id="U1")
+
+    result = store.retrieve(
+        RetrievalQuery(
+            question="Escalate P1 incidents to the on-call engineer",
+            requesting_user_id="U2",
+        )
+    )
+
+    assert result.evidence_list == ()
+
+
+def test_retrieve_returns_baseline_document_regardless_of_requesting_user() -> None:
+    # TC-FV10-109
+    store = InMemoryKnowledgeStore()
+    baseline_document = make_document(source_id="doc_baseline")
+    store.save_document(baseline_document)
+    store.save_chunk(
+        DocumentChunk(
+            chunk_id="chunk_baseline",
+            source_id=baseline_document.source_id,
+            chunk_index=1,
+            chunk_text="Revenue increased after campaign launch.",
+        )
+    )
+
+    result = store.retrieve(
+        RetrievalQuery(
+            question="Revenue increased after campaign launch.",
+            requesting_user_id="any_user",
+        )
+    )
+
+    assert tuple(item.source_id for item in result.evidence_list) == ("doc_baseline",)
+
+
+def test_save_document_accepts_both_baseline_and_owned_documents() -> None:
+    # TC-FV10-110
+    store = InMemoryKnowledgeStore()
+
+    store.save_document(make_document(source_id="doc_baseline_ok"))
+    store.save_document(
+        KnowledgeDocument(
+            source_id="doc_owned_ok",
+            title="Owned doc",
+            doc_type="report",
+            publish_time=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            owner_user_id="U1",
+        )
+    )
+
+    baseline_doc = store._documents_by_source_id["doc_baseline_ok"]  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+    owned_doc = store._documents_by_source_id["doc_owned_ok"]  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+    assert baseline_doc.owner_user_id is None
+    assert owned_doc.owner_user_id == "U1"
+
+
+def test_retrieve_includes_owned_document_once_shared_visibility_authorizes_requester() -> None:
+    # TC-FV10-111: stubs the Spec FV10.2 share lookup this store defers to.
+    document_id = "doc_shared_with_u2"
+
+    def shared_visibility(document: KnowledgeDocument) -> frozenset[str]:
+        if document.source_id == document_id:
+            return frozenset({"U2"})
+        return frozenset()
+
+    store = InMemoryKnowledgeStore(shared_visibility_resolver=shared_visibility)
+    document = KnowledgeDocument(
+        source_id=document_id,
+        title="Analyst's shared runbook",
+        doc_type="report",
+        publish_time=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        owner_user_id="U1",
+    )
+    store.save_document(document)
+    store.save_chunk(
+        DocumentChunk(
+            chunk_id="chunk_shared_with_u2",
+            source_id=document_id,
+            chunk_index=1,
+            chunk_text="Escalate P1 incidents to the on-call engineer within 15 minutes.",
+        )
+    )
+
+    unauthorized_result = store.retrieve(
+        RetrievalQuery(
+            question="Escalate P1 incidents to the on-call engineer",
+            requesting_user_id="U3",
+        )
+    )
+    authorized_result = store.retrieve(
+        RetrievalQuery(
+            question="Escalate P1 incidents to the on-call engineer",
+            requesting_user_id="U2",
+        )
+    )
+
+    assert unauthorized_result.evidence_list == ()
+    assert tuple(item.source_id for item in authorized_result.evidence_list) == (document_id,)
+
+
+def test_conversation_context_helps_a_pronoun_only_query_match_the_right_document() -> None:
+    # Spec FV10.4 FR-FV10-052/056: a follow-up like "why did that happen?"
+    # carries no subject of its own — conversation_context supplies it.
+    store = InMemoryKnowledgeStore()
+    document = make_document(source_id="doc_campaign_pause")
+    store.save_document(document)
+    store.save_chunk(
+        DocumentChunk(
+            chunk_id="chunk_campaign_pause",
+            source_id=document.source_id,
+            chunk_index=1,
+            chunk_text="Revenue dropped after campaign spend paused in July.",
+        )
+    )
+
+    without_context = store.retrieve(
+        RetrievalQuery(
+            question="Why did that happen?",
+            requesting_user_id="u_001",
+        )
+    )
+    with_context = store.retrieve(
+        RetrievalQuery(
+            question="Why did that happen?",
+            requesting_user_id="u_001",
+            conversation_context="Why did revenue drop after the campaign spend paused?",
+        )
+    )
+
+    assert tuple(item.source_id for item in with_context.evidence_list) == ("doc_campaign_pause",)
+    # With no keyword overlap of its own, the question only clears the
+    # relevance floor on baseline source-weight; conversation_context
+    # supplies the missing subject and measurably raises the score.
+    assert with_context.evidence_list[0].relevance_score > without_context.evidence_list[0].relevance_score
+
+
+def test_conversation_context_defaults_to_empty_and_does_not_change_baseline_ranking() -> None:
+    # NFR-FV10-018: a first-turn query (no conversation_context) must rank
+    # identically to how it did before this field existed.
+    store = InMemoryKnowledgeStore()
+    document = make_document(source_id="doc_campaign")
+    store.save_document(document)
+    store.save_chunk(
+        DocumentChunk(
+            chunk_id="chunk_campaign",
+            source_id=document.source_id,
+            chunk_index=1,
+            chunk_text="Revenue dropped after campaign spend paused.",
+        )
+    )
+
+    result = store.retrieve(
+        RetrievalQuery(question="Why did revenue drop?", requesting_user_id="u_001")
+    )
+
+    assert tuple(item.source_id for item in result.evidence_list) == ("doc_campaign",)
+    assert result.evidence_list[0].relevance_score > 0

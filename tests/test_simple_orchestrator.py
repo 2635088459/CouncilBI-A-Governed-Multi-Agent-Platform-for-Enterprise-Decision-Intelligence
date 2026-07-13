@@ -92,10 +92,11 @@ class RecordingLLMClient:
 def make_request(
     question: str = "Show revenue trend.",
     role: UserRole = UserRole.BUSINESS_USER,
+    session_id: str = "s_001",
 ) -> QueryRequest:
     return QueryRequest(
         user_id="u_001",
-        session_id="s_001",
+        session_id=session_id,
         question=question,
         locale=Locale.EN,
         role=role,
@@ -257,6 +258,172 @@ def test_orchestrator_passes_sql_rows_and_evidence_to_answer_synthesis_llm() -> 
     assert "Governed Analytics" in prompt
     assert "ticket_count" in prompt
     assert "doc_support_ops_june_2026#p1" in prompt
+
+
+def test_second_turn_sql_generation_includes_first_turns_question_and_answer() -> None:
+    # Spec FV10.4 TC-FV10-141 / FR-FV10-052
+    llm_client = RecordingLLMClient("SELECT month, revenue FROM revenue_by_month LIMIT 10")
+    orchestrator = SimpleOrchestrator(llm_client=llm_client)
+
+    first_answer = orchestrator.answer(
+        make_request("Show me the orders trend.", session_id="ses_multiturn"),
+        trace_id="trc_turn_1",
+    )
+    llm_client.requests.clear()
+    orchestrator.answer(
+        make_request("What about last month?", session_id="ses_multiturn"),
+        trace_id="trc_turn_2",
+    )
+
+    sql_requests = [request for request in llm_client.requests if request.task_type == "sql_generation"]
+    assert len(sql_requests) == 1
+    contents = [message["content"] for message in sql_requests[0].messages]
+    assert "Show me the orders trend." in contents
+    assert first_answer.answer_text in contents
+    # The prior turn's messages must precede the current question.
+    assert contents.index("Show me the orders trend.") < contents.index("What about last month?")
+
+
+def test_sql_generation_prompt_includes_the_real_schema() -> None:
+    # A question the fallback LLM path has to generate SQL for (not matched
+    # by _build_sql_candidate's own hardcoded shortcuts) must see the real
+    # table/column names, not the bare "governed ChatBI schema" placeholder
+    # this prompt used to send with zero schema information at all.
+    llm_client = RecordingLLMClient("SELECT month, revenue FROM revenue_by_month LIMIT 10")
+    orchestrator = SimpleOrchestrator(llm_client=llm_client)
+
+    orchestrator.answer(make_request("Which months had the biggest MoM revenue swings?"))
+
+    sql_requests = [request for request in llm_client.requests if request.task_type == "sql_generation"]
+    assert len(sql_requests) == 1
+    system_prompt = sql_requests[0].messages[0]["content"]
+    assert "revenue_by_month" in system_prompt
+    assert "support_ticket_summary" in system_prompt
+    # Deliberately excluded — see simple_orchestrator.py's own comment on
+    # why "campaigns" would pass a schema hint the governance allow-list
+    # (a separate, pre-existing table-name mismatch) then rejects anyway.
+    assert "campaigns" not in system_prompt
+
+
+def test_sql_candidate_strips_prose_and_a_markdown_fence_from_the_llm_response() -> None:
+    # A real model, given a question not matched by any hardcoded shortcut,
+    # was observed replying with an explanatory paragraph followed by a
+    # ```sql fenced block instead of bare SQL. The guardrail's "must start
+    # with select/with" check rejected that whole blob outright — the
+    # blocked-write-statement UI showed even though nothing in the query
+    # was a write. This must extract just the SQL from the fence.
+    fenced_response = (
+        "To analyze month-over-month swings, you can use:\n\n"
+        "```sql\n"
+        "WITH monthly AS (\n"
+        "    SELECT month, revenue FROM revenue_by_month\n"
+        ")\n"
+        "SELECT month, revenue FROM monthly ORDER BY revenue DESC LIMIT 10\n"
+        "```"
+    )
+    llm_client = RecordingLLMClient(fenced_response)
+    orchestrator = SimpleOrchestrator(llm_client=llm_client)
+
+    answer = orchestrator.answer(make_request("Which months had the biggest MoM revenue swings?"))
+
+    assert answer.sql_text.lower().startswith("with monthly as")
+    assert "```" not in answer.sql_text
+    assert "To analyze" not in answer.sql_text
+    assert answer.warnings == ()
+
+
+def test_first_turn_in_a_new_session_includes_no_conversation_history() -> None:
+    # Spec FV10.4 TC-FV10-142 / NFR-FV10-018
+    llm_client = RecordingLLMClient("SELECT month, revenue FROM revenue_by_month LIMIT 10")
+    orchestrator = SimpleOrchestrator(llm_client=llm_client)
+
+    orchestrator.answer(
+        make_request("Show me the orders trend.", session_id="ses_brand_new"),
+        trace_id="trc_first_turn",
+    )
+
+    sql_requests = [request for request in llm_client.requests if request.task_type == "sql_generation"]
+    assert len(sql_requests) == 1
+    assert len(sql_requests[0].messages) == 2
+    assert sql_requests[0].messages[0]["role"] == "system"
+    assert sql_requests[0].messages[1]["content"] == "Show me the orders trend."
+
+
+def test_a_different_session_receives_no_context_from_the_first_session() -> None:
+    # Spec FV10.4 AC-FV10-045: a pronoun-only follow-up asked in a session
+    # with no prior turns of its own is answered exactly as if it were the
+    # only question ever asked — here, that means "unsupported" (there is
+    # nothing to resolve "last month" against), proving session A's context
+    # did not leak into session B.
+    llm_client = RecordingLLMClient("SELECT month, revenue FROM revenue_by_month LIMIT 10")
+    orchestrator = SimpleOrchestrator(llm_client=llm_client)
+
+    orchestrator.answer(
+        make_request("Show me the orders trend.", session_id="ses_a"),
+        trace_id="trc_session_a",
+    )
+    llm_client.requests.clear()
+    answer_in_new_session = orchestrator.answer(
+        make_request("What about last month?", session_id="ses_b"),
+        trace_id="trc_session_b",
+    )
+
+    sql_requests = [request for request in llm_client.requests if request.task_type == "sql_generation"]
+    assert sql_requests == []
+    assert answer_in_new_session.warnings[0].code is ErrorCode.UNSUPPORTED_QUESTION
+
+
+def test_a_second_question_in_a_different_session_gets_only_that_sessions_context() -> None:
+    # Spec FV10.4 AC-FV10-045, exercised with a real second turn in session B
+    # so the isolation is proven on the actual context content, not just on
+    # the unsupported-question edge case above.
+    llm_client = RecordingLLMClient("SELECT month, revenue FROM revenue_by_month LIMIT 10")
+    orchestrator = SimpleOrchestrator(llm_client=llm_client)
+
+    orchestrator.answer(
+        make_request("Show me the orders trend.", session_id="ses_a"),
+        trace_id="trc_session_a",
+    )
+    orchestrator.answer(
+        make_request("Show me the refunds trend.", session_id="ses_b"),
+        trace_id="trc_session_b_turn_1",
+    )
+    llm_client.requests.clear()
+    orchestrator.answer(
+        make_request("What about last month?", session_id="ses_b"),
+        trace_id="trc_session_b_turn_2",
+    )
+
+    sql_requests = [request for request in llm_client.requests if request.task_type == "sql_generation"]
+    assert len(sql_requests) == 1
+    contents = [message["content"] for message in sql_requests[0].messages]
+    assert "Show me the refunds trend." in contents
+    assert "Show me the orders trend." not in contents
+
+
+def test_context_window_caps_history_to_the_configured_number_of_turns() -> None:
+    # Spec FV10.4 AC-FV10-046 / NFR-FV10-019
+    llm_client = RecordingLLMClient("SELECT month, revenue FROM revenue_by_month LIMIT 10")
+    orchestrator = SimpleOrchestrator(llm_client=llm_client, conversation_context_turns=2)
+
+    for turn in range(1, 4):
+        orchestrator.answer(
+            make_request(f"Show me the orders trend, turn {turn}.", session_id="ses_windowed"),
+            trace_id=f"trc_window_turn_{turn}",
+        )
+    llm_client.requests.clear()
+    orchestrator.answer(
+        make_request("Show me the orders trend, turn 4.", session_id="ses_windowed"),
+        trace_id="trc_window_turn_4",
+    )
+
+    sql_requests = [request for request in llm_client.requests if request.task_type == "sql_generation"]
+    contents = [message["content"] for message in sql_requests[0].messages]
+    # Window of 2 turns => 2 prior questions + 2 prior answers + system + current question = 6.
+    assert len(sql_requests[0].messages) == 6
+    assert "Show me the orders trend, turn 1." not in contents
+    assert "Show me the orders trend, turn 2." in contents
+    assert "Show me the orders trend, turn 3." in contents
 
 
 def test_orchestrator_writes_spec_trace_events_for_success() -> None:
@@ -587,6 +754,41 @@ def test_orchestrator_uses_knowledge_store_for_rag_evidence() -> None:
     assert answer.retrieval_stats is not None
     assert answer.retrieval_stats.selected_count == 1
     assert answer.retrieval_stats.filtered_count == 1
+
+
+def test_orchestrator_answers_a_document_only_question_without_sql() -> None:
+    # FR-FV10-058/059: a pure document question (RAG keyword, no data-domain
+    # signal) must not plan or generate SQL at all — sql_text/table_result
+    # stay empty, and the answer is grounded purely in RAG evidence.
+    knowledge_store = InMemoryKnowledgeStore()
+    knowledge_store.save_document(
+        KnowledgeDocument(
+            source_id="doc_pricing",
+            title="Pricing onepager",
+            doc_type="report",
+            publish_time=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+    )
+    knowledge_store.save_chunk(
+        DocumentChunk(
+            chunk_id="chunk_pricing_1",
+            source_id="doc_pricing",
+            chunk_index=1,
+            chunk_text="The Team tier is priced at $49 per seat per month.",
+        )
+    )
+    orchestrator = SimpleOrchestrator(knowledge_store=knowledge_store)
+
+    answer = orchestrator.answer(
+        make_request("Explain what the onepager says about pricing.")
+    )
+
+    assert answer.sql_text == ""
+    assert answer.table_result == TableResult(columns=(), rows=())
+    assert len(answer.evidence_list) == 1
+    assert answer.evidence_list[0].source_id == "doc_pricing"
+    assert answer.warnings == ()
+    assert answer.confidence > 0.5
 
 
 def test_orchestrator_filters_rag_evidence_by_request_role() -> None:

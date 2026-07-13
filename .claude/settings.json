@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import json; print\\(json.load\\(open\\('signin11.json'\\)\\)['data']['tokens']['access_token']\\)\")",
+      "Bash(curl -s -X POST http://localhost:8000/api/v2/chat/query -H 'Authorization: Bearer __TRACKED_VAR__' -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(python3 -c ' *)",
+      "Bash(grep -n \"^  [a-z].*:$\" docker-compose.yml)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('table_result:', \\(d.get\\('data'\\) or {}\\).get\\('table_result'\\)\\); print\\('error:', d.get\\('error'\\)\\)\")",
+      "Bash(python3 -m pytest tests/test_sql_validator.py -v)",
+      "Bash(python3 -m pytest tests/test_simple_orchestrator.py::test_sql_generation_prompt_includes_the_real_schema tests/test_simple_orchestrator.py::test_sql_candidate_strips_prose_and_a_markdown_fence_from_the_llm_response -v)",
+      "Bash(python3 -m pytest tests/test_sql_reference_parser.py tests/test_sql_validator.py tests/test_simple_orchestrator.py -v)",
+      "Bash(python3 -m pytest tests/test_llm_provider_gateway.py::test_orchestrator_uses_llm_client_for_sql_generation -v)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v2/auth/signin -H \"Content-Type: application/json\" -d '{\"request_id\":\"req_guardfix2\",\"email\":\"analyst@example.com\",\"password\":\"demo1234\"}')",
+      "Bash(python3 -c \"import json; print\\(json.load\\(open\\('signin_guardfix2.json'\\)\\)['data']['tokens']['access_token']\\)\")",
+      "Bash(awk -F- '{print $1\"-\"$2, $NF}')",
+      "Bash(sort -k1,1 -k2,2n)",
+      "Bash(awk '{a[$1]=$2} END{for \\(k in a\\) print k, a[k]}')",
+      "Bash(python -m pytest tests/test_sql_validator.py tests/test_simple_guardrail.py tests/test_api_models.py -q)",
+      "Bash(python -m pytest tests/test_app.py tests/test_guardrail_contracts.py tests/test_guardrail_decision_builder.py tests/test_guardrail_errors.py tests/test_guardrail_legacy_adapter.py tests/test_guardrail_rule_hits.py tests/test_v2_chat_query_http.py tests/test_v2_guardrail.py tests/test_chat_query_with_files.py tests/test_chat_query_federated.py -q)",
+      "Bash(python -m pytest tests/test_v2_chat_query_http.py::test_v2_chat_query_with_non_queryable_model_output_returns_sql_not_queryable -q)",
+      "Bash(python -m pytest tests/test_v2_chat_query_http.py -q)",
+      "Bash(python -m pytest tests/test_federated_query_agent.py -q)",
+      "Bash(python -m pytest tests/test_chat_query_with_files.py::test_chat_query_hybrid_comparison_excludes_low_relevance_knowledge_base_sources -q)",
+      "Bash(python -m pytest tests/test_chat_query_federated.py -q)",
+      "Bash(python -m pytest tests/test_answer_synthesis.py -q)",
+      "Bash(python -m pytest tests/ -q -x --timeout=300)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -m pytest tests/test_backend_api_boundaries.py tests/test_chat_query_file_rag_analytics.py tests/test_http_app.py tests/test_final_submission_package.py tests/test_docker_compose_architecture.py tests/test_react_vite_frontend.py -q)",
+      "Bash(python -m pytest tests/test_chat_query_file_rag_analytics.py::test_file_query_layers_in_knowledge_base_rag_evidence_for_a_why_question -q)"
+    ]
+  }
+}

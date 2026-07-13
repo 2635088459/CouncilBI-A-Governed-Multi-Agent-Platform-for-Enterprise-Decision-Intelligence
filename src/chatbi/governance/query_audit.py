@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -26,9 +27,11 @@ CREATE TABLE IF NOT EXISTS chatbi_query_audit_log (
     has_chart       BOOLEAN NOT NULL DEFAULT FALSE,
     latency_ms      INTEGER,
     evidence_json   TEXT,
+    file_ids_used   JSONB,
     accepted_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at     TIMESTAMPTZ
 );
+ALTER TABLE chatbi_query_audit_log ADD COLUMN IF NOT EXISTS file_ids_used JSONB;
 CREATE INDEX IF NOT EXISTS idx_query_audit_user_id
     ON chatbi_query_audit_log (user_id, accepted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_query_audit_status
@@ -40,6 +43,13 @@ CREATE INDEX IF NOT EXISTS idx_query_audit_accepted_at
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _jsonb(value: object) -> Any:
+    """Wrap a value for a JSONB column; psycopg does not adapt plain dicts/lists."""
+
+    json_types = importlib.import_module("psycopg.types.json")
+    return json_types.Jsonb(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +70,7 @@ class QueryAuditRecord:
     has_chart: bool = False
     latency_ms: int | None = None
     evidence_json: str | None = None
+    file_ids_used: tuple[str, ...] | None = None
     accepted_at: datetime = field(default_factory=_utc_now)
     finished_at: datetime | None = None
 
@@ -87,6 +98,7 @@ class QueryAuditRecord:
             "has_chart": self.has_chart,
             "latency_ms": self.latency_ms,
             "evidence": evidence,
+            "file_ids_used": list(self.file_ids_used) if self.file_ids_used else [],
             "accepted_at": self.accepted_at.isoformat() if self.accepted_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
@@ -103,18 +115,19 @@ class QueryAuditLog:
         self._conn.commit()
 
     def save(self, record: QueryAuditRecord) -> None:
+        file_ids_used = _jsonb(list(record.file_ids_used)) if record.file_ids_used else None
         self._conn.execute(
             """
             INSERT INTO chatbi_query_audit_log (
                 trace_id, request_id, user_id, org_id, session_id, role, question,
                 answer_text, status, error_code, blocked,
                 sql_row_count, rag_doc_count, has_chart,
-                latency_ms, evidence_json, accepted_at, finished_at
+                latency_ms, evidence_json, file_ids_used, accepted_at, finished_at
             ) VALUES (
                 %s,%s,%s,%s,%s,%s,%s,
                 %s,%s,%s,%s,
                 %s,%s,%s,
-                %s,%s,%s,%s
+                %s,%s,%s,%s,%s
             )
             ON CONFLICT (trace_id) DO UPDATE SET
                 answer_text   = EXCLUDED.answer_text,
@@ -126,6 +139,7 @@ class QueryAuditLog:
                 has_chart     = EXCLUDED.has_chart,
                 latency_ms    = EXCLUDED.latency_ms,
                 evidence_json = EXCLUDED.evidence_json,
+                file_ids_used = EXCLUDED.file_ids_used,
                 finished_at   = EXCLUDED.finished_at
             """,
             (
@@ -133,7 +147,7 @@ class QueryAuditLog:
                 record.session_id, record.role, record.question,
                 record.answer_text, record.status, record.error_code, record.blocked,
                 record.sql_row_count, record.rag_doc_count, record.has_chart,
-                record.latency_ms, record.evidence_json,
+                record.latency_ms, record.evidence_json, file_ids_used,
                 record.accepted_at, record.finished_at,
             ),
         )
@@ -177,7 +191,7 @@ class QueryAuditLog:
             SELECT trace_id, request_id, user_id, org_id, session_id, role, question,
                    answer_text, status, error_code, blocked,
                    sql_row_count, rag_doc_count, has_chart,
-                   latency_ms, evidence_json, accepted_at, finished_at
+                   latency_ms, evidence_json, file_ids_used, accepted_at, finished_at
             FROM chatbi_query_audit_log
             {where_sql}
             ORDER BY accepted_at DESC
@@ -230,7 +244,7 @@ class QueryAuditLog:
             SELECT trace_id, request_id, user_id, org_id, session_id, role, question,
                    answer_text, status, error_code, blocked,
                    sql_row_count, rag_doc_count, has_chart,
-                   latency_ms, evidence_json, accepted_at, finished_at
+                   latency_ms, evidence_json, file_ids_used, accepted_at, finished_at
             FROM chatbi_query_audit_log WHERE trace_id = %s
             """,
             (trace_id,),
@@ -288,6 +302,7 @@ class QueryAuditLog:
             has_chart=bool(row[13]),
             latency_ms=row[14],
             evidence_json=row[15],
-            accepted_at=row[16],
-            finished_at=row[17],
+            file_ids_used=tuple(row[16]) if row[16] else None,
+            accepted_at=row[17],
+            finished_at=row[18],
         )

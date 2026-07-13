@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from math import sqrt
 from time import perf_counter
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 import re
 
 from chatbi.core.contracts import EvidenceItem, RetrievalStats
@@ -29,6 +29,10 @@ def _empty_roles() -> tuple[str, ...]:
     return ()
 
 
+def _no_shared_visibility(document: "KnowledgeDocument") -> frozenset[str]:
+    return frozenset()
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeDocument:
     source_id: str
@@ -37,6 +41,7 @@ class KnowledgeDocument:
     publish_time: datetime
     tags: tuple[str, ...] = field(default_factory=_empty_tags)
     allowed_roles: tuple[str, ...] = field(default_factory=_empty_roles)
+    owner_user_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +87,9 @@ class RetrievalQuery:
     """
 
     question: str
+    requesting_user_id: str
     metric_context: str = ""
+    conversation_context: str = ""
     doc_type: str | None = None
     doc_types: tuple[str, ...] = ()
     published_from: datetime | None = None
@@ -106,10 +113,33 @@ class RetrievalResult:
 class InMemoryKnowledgeStore:
     """Store documents, chunks, and embeddings for local RAG workflows."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        shared_visibility_resolver: Callable[[KnowledgeDocument], frozenset[str]] | None = None,
+    ) -> None:
         self._documents_by_source_id: dict[str, KnowledgeDocument] = {}
         self._chunks_by_chunk_id: dict[str, DocumentChunk] = {}
         self._embeddings_by_chunk_id: dict[str, ChunkEmbedding] = {}
+        # FR-FV10-039: resolves which additional users may see an
+        # owner-scoped document via an active file share grant (Spec
+        # FV10.2). Until that spec is wired in, this defaults to "nobody",
+        # which is a safe default for a private-by-default document.
+        self._shared_visibility_resolver: Callable[[KnowledgeDocument], frozenset[str]] = (
+            shared_visibility_resolver or _no_shared_visibility
+        )
+
+    def set_shared_visibility_resolver(
+        self, resolver: Callable[[KnowledgeDocument], frozenset[str]]
+    ) -> None:
+        """Rewire the FR-FV10-039 share-visibility hook after construction.
+
+        Spec FV10.2's resolver needs the app's ``FileRepository``, which is
+        not always available yet when this store is first built (see
+        ``http._build_default_chatbi_application``). Callers wire the real
+        resolver in once that repository exists.
+        """
+
+        self._shared_visibility_resolver = resolver
 
     def save_document(self, document: KnowledgeDocument) -> None:
         self._require_text(document.source_id, "source_id")
@@ -133,6 +163,19 @@ class InMemoryKnowledgeStore:
         if not embedding.embedding_vector:
             raise ValueError("embedding_vector is required")
         self._embeddings_by_chunk_id[embedding.chunk_id] = embedding
+
+    def remove_document(self, source_id: str) -> None:
+        """Remove a document and all of its chunks/embeddings (e.g. on demote)."""
+
+        self._documents_by_source_id.pop(source_id, None)
+        stale_chunk_ids = [
+            chunk_id
+            for chunk_id, chunk in self._chunks_by_chunk_id.items()
+            if chunk.source_id == source_id
+        ]
+        for chunk_id in stale_chunk_ids:
+            self._chunks_by_chunk_id.pop(chunk_id, None)
+            self._embeddings_by_chunk_id.pop(chunk_id, None)
 
     def ingest_document(
         self,
@@ -180,6 +223,7 @@ class InMemoryKnowledgeStore:
         published_to: datetime | None = None,
         user_role: str | None = None,
         tags: tuple[str, ...] = (),
+        requesting_user_id: str = "",
     ) -> tuple[KnowledgeChunkRecord, ...]:
         records: list[KnowledgeChunkRecord] = []
         for chunk in sorted(
@@ -199,6 +243,8 @@ class InMemoryKnowledgeStore:
                 continue
             if tags and not set(tags).issubset(set(document.tags)):
                 continue
+            if not self._owner_can_read(document, requesting_user_id):
+                continue
             records.append(
                 KnowledgeChunkRecord(
                     document=document,
@@ -216,6 +262,7 @@ class InMemoryKnowledgeStore:
         published_to: datetime | None = None,
         user_role: str | None = None,
         tags: tuple[str, ...] = (),
+        requesting_user_id: str = "",
     ) -> tuple[EvidenceItem, ...]:
         return tuple(
             record.to_evidence_item()
@@ -226,6 +273,7 @@ class InMemoryKnowledgeStore:
                 published_to=published_to,
                 user_role=user_role,
                 tags=tags,
+                requesting_user_id=requesting_user_id,
             )
         )
 
@@ -240,6 +288,7 @@ class InMemoryKnowledgeStore:
             published_to=query.published_to,
             user_role=query.user_role,
             tags=query.tags,
+            requesting_user_id=query.requesting_user_id,
         )
         ranked_records = self._rank_records(filtered_records, query)
         selected_records = self._dedupe_adjacent_chunks(ranked_records[: max(query.top_k * 2, query.top_k)])
@@ -272,19 +321,40 @@ class InMemoryKnowledgeStore:
             return True
         return user_role in document.allowed_roles
 
+    def _owner_can_read(self, document: KnowledgeDocument, requesting_user_id: str) -> bool:
+        """FR-FV10-038/039: baseline docs stay open; owned docs are private.
+
+        ``owner_user_id is None`` marks baseline/system knowledge (seeded
+        documents), which this spec leaves untouched — visibility there is
+        governed entirely by ``allowed_roles``, not by who is asking.
+        """
+
+        if document.owner_user_id is None:
+            return True
+        if requesting_user_id and requesting_user_id == document.owner_user_id:
+            return True
+        return bool(requesting_user_id) and requesting_user_id in self._shared_visibility(document)
+
+    def _shared_visibility(self, document: KnowledgeDocument) -> frozenset[str]:
+        return self._shared_visibility_resolver(document)
+
     def _rank_records(
         self,
         records: tuple[KnowledgeChunkRecord, ...],
         query: RetrievalQuery,
     ) -> tuple[KnowledgeChunkRecord, ...]:
-        query_text = f"{query.question} {query.metric_context}".strip()
-        query_tokens = _tokens(query_text)
+        # FR-FV10-052/056: folding recent-turn context into the retrieval
+        # text lets a follow-up like "why did that happen?" still match
+        # documents about the actual subject from the prior turn, with no
+        # separate rewrite step.
+        query_text = f"{query.question} {query.metric_context} {query.conversation_context}".strip()
+        query_tokens = text_tokens(query_text)
         query_embedding = query.query_embedding or text_embedding(query_text)
         scored_records: list[KnowledgeChunkRecord] = []
 
         for record in records:
-            keyword_score = _keyword_score(query_tokens, _tokens(record.chunk.chunk_text))
-            vector_score = _cosine_similarity(
+            keyword_score = keyword_overlap_score(query_tokens, text_tokens(record.chunk.chunk_text))
+            vector_score = cosine_similarity(
                 query_embedding,
                 record.embedding.embedding_vector if record.embedding is not None else text_embedding(record.chunk.chunk_text),
             )
@@ -419,7 +489,7 @@ def text_embedding(text: str, dimensions: int = 16) -> tuple[float, ...]:
         raise ValueError("dimensions must be greater than 0")
 
     vector = [0.0] * dimensions
-    for token in _tokens(text):
+    for token in text_tokens(text):
         bucket = sum(ord(character) for character in token) % dimensions
         vector[bucket] += 1.0
     magnitude = sqrt(sum(value * value for value in vector))
@@ -428,11 +498,11 @@ def text_embedding(text: str, dimensions: int = 16) -> tuple[float, ...]:
     return tuple(value / magnitude for value in vector)
 
 
-def _tokens(text: str) -> tuple[str, ...]:
+def text_tokens(text: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", text.lower()))
 
 
-def _keyword_score(query_tokens: tuple[str, ...], chunk_tokens: tuple[str, ...]) -> float:
+def keyword_overlap_score(query_tokens: tuple[str, ...], chunk_tokens: tuple[str, ...]) -> float:
     if not query_tokens or not chunk_tokens:
         return 0.0
 
@@ -441,7 +511,7 @@ def _keyword_score(query_tokens: tuple[str, ...], chunk_tokens: tuple[str, ...])
     return len(query_set & chunk_set) / len(query_set)
 
 
-def _cosine_similarity(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+def cosine_similarity(left: tuple[float, ...], right: tuple[float, ...]) -> float:
     if not left or not right:
         return 0.0
 

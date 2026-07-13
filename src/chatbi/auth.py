@@ -243,6 +243,15 @@ class AuthStore(Protocol):
     def list_role_audit_events(self, org_id: str) -> tuple[RoleAuditEvent, ...]:
         ...
 
+    def list_users_by_org_and_role(self, org_id: str, role: str) -> tuple[UserRecord, ...]:
+        """Return every user in ``org_id`` who currently holds ``role``.
+
+        Backs Spec FV10.2's share-request fan-out (FR-FV10-042): "every user
+        in the requester's org_id who holds the requester's role at approval
+        time." A snapshot query, not a live-updating group.
+        """
+        ...
+
 
 class AuthConnection(Protocol):
     def execute(self, sql: str, params: Sequence[object] = ()) -> Any:
@@ -520,6 +529,14 @@ class InMemoryAuthStore:
 
     def list_role_audit_events(self, org_id: str) -> tuple[RoleAuditEvent, ...]:
         return tuple(event for event in self._role_audit_events if event.org_id == org_id)
+
+    def list_users_by_org_and_role(self, org_id: str, role: str) -> tuple[UserRecord, ...]:
+        matches = [
+            user
+            for user in self._users_by_id.values()
+            if user.org_id == org_id and role in user.roles
+        ]
+        return tuple(sorted(matches, key=lambda user: user.user_id))
 
 
 class PostgresAuthStore:
@@ -815,6 +832,18 @@ class PostgresAuthStore:
         )
         return tuple(self._row_to_role_audit_event(row) for row in self._connection.fetchall())
 
+    def list_users_by_org_and_role(self, org_id: str, role: str) -> tuple[UserRecord, ...]:
+        self._connection.execute(
+            f"""
+            SELECT {", ".join(self._user_columns)}
+            FROM auth.users
+            WHERE org_id = %s AND %s = ANY(roles)
+            ORDER BY user_id ASC
+            """,
+            (org_id, role),
+        )
+        return tuple(self._row_to_user(row) for row in self._connection.fetchall())
+
     def _row_to_user(self, row: Sequence[object]) -> UserRecord:
         if len(row) not in {len(self._user_columns), len(self._user_columns) - 1}:
             raise ValueError("auth user row has unexpected column count.")
@@ -977,6 +1006,10 @@ ROLE_PERMISSIONS: Mapping[str, tuple[str, ...]] = {
         "chat:query",
         "chat:history:read:self",
         "query:read:self",
+        "files:upload",
+        "files:read",
+        "files:delete",
+        "files:share_requests:submit",
     ),
     "analyst": (
         "chat:query",
@@ -984,6 +1017,11 @@ ROLE_PERMISSIONS: Mapping[str, tuple[str, ...]] = {
         "query:read:self",
         "analytics:run",
         "eval:read:approved",
+        "files:upload",
+        "files:read",
+        "files:delete",
+        "files:share",
+        "files:share_requests:submit",
     ),
     "admin": (
         "chat:query",
@@ -997,6 +1035,14 @@ ROLE_PERMISSIONS: Mapping[str, tuple[str, ...]] = {
         "admin:audit:read",
         "documents:index",
         "analytics:run",
+        "files:upload",
+        "files:read",
+        "files:delete",
+        "files:share",
+        "files:share_requests:submit",
+        "admin:knowledge:promote",
+        "admin:knowledge:demote",
+        "admin:share_requests:review",
     ),
 }
 

@@ -44,7 +44,9 @@ class RagAgentRunner:
     evidence_items: tuple[EvidenceItem, ...] = ()
     knowledge_store: InMemoryKnowledgeStore | None = None
     question: str = ""
+    requesting_user_id: str = ""
     metric_context: str = ""
+    conversation_context: str = ""
     doc_type: str | None = None
     doc_types: tuple[str, ...] = ()
     published_from: datetime | None = None
@@ -120,7 +122,9 @@ class RagAgentRunner:
         return self.knowledge_store.retrieve(
             RetrievalQuery(
                 question=self.question,
+                requesting_user_id=self.requesting_user_id,
                 metric_context=self.metric_context,
+                conversation_context=self.conversation_context,
                 doc_type=self.doc_type,
                 doc_types=self.doc_types,
                 published_from=self.published_from,
@@ -158,6 +162,7 @@ class RagAgentRunner:
             published_to=self.published_to,
             user_role=self.user_role,
             tags=self.tags,
+            requesting_user_id=self.requesting_user_id,
         )
 
     def _validate_evidence_items(self, evidence_items: tuple[EvidenceItem, ...]) -> None:

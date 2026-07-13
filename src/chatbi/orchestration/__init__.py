@@ -25,6 +25,7 @@ from chatbi.orchestration.executor import (
     PlanExecutionResult,
     PlanExecutor,
 )
+from chatbi.orchestration.result_merger import MergedResultContext, ResultMerger
 from chatbi.orchestration.routing import (
     AgentPlanStep,
     ExecutionPlan,
@@ -83,6 +84,7 @@ __all__ = [
     "InMemoryAgentTraceLog",
     "InMemoryOrchestrationStateStore",
     "InMemoryWorkerHandoffQueue",
+    "MergedResultContext",
     "OrchestrationRequest",
     "OrchestrationRequestState",
     "OrchestrationStateStore",
@@ -90,6 +92,7 @@ __all__ = [
     "PlanExecutor",
     "QuestionClassifier",
     "RequestStateStage",
+    "ResultMerger",
     "SimpleOrchestrator",
     "StoredAgentStep",
     "TaskType",

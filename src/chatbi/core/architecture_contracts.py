@@ -53,6 +53,13 @@ class AnswerPayloadV2(TypedDict):
     evidence_list: list[EvidenceItemV2]
     agent_timeline: NotRequired[list[dict[str, Any]]]
     confidence: float
+    # FR-FV10-024/025: which data source a table_result came from, so the
+    # frontend can show the "文件数据" badge; FR-FV10-019/AC-FV10-009: set
+    # when a file-data query's SQL was blocked by the guardrail instead of
+    # ever reaching DuckDB.
+    table_result_source: NotRequired[str | None]
+    guardrail_blocked: NotRequired[bool]
+    analytics_result: NotRequired[dict[str, Any] | None]
 
 
 class ChatQueryRequestV2(TypedDict):

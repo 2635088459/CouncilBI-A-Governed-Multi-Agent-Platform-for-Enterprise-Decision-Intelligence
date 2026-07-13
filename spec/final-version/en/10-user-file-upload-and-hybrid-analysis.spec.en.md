@@ -586,3 +586,9 @@ src/chatbi/agents/file_data_agent.py
 src/chatbi/agents/federated_query_agent.py
 src/chatbi/orchestration/result_merger.py   # extended with file source labelling
 ```
+
+---
+
+## 11. Follow-Up Specs
+
+Post-implementation review found a cross-tenant data leak in the RAG knowledge base and refined the sharing/retention model. See [10-followups/](10-followups/README.en.md) for Spec FV10.1 (RAG per-user isolation, FR-FV10-037–040), Spec FV10.2 (file sharing approval workflow, FR-FV10-041–044), Spec FV10.3 (retention and auto-archival, FR-FV10-045–050), and Spec FV10.4 (multi-turn conversation memory, FR-FV10-051–056).
