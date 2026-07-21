@@ -60,8 +60,8 @@ Roughly **2.5–3.5 person-days**, and this is the phase whose cost is dominated
 
 | ID | Requirement | Status |
 |---|---|---|
-| FR-FV03-024 | `EvalCase` must carry an optional `expected_chunk_ids` field for retrieval ground truth. | Proposed |
-| FR-FV03-025 | A labeled Golden Dataset of real business questions against real seeded documents must exist, each with one or more expected chunk IDs. | Proposed |
-| FR-FV03-026 | The system must compute Hit Rate@K and MRR over the Golden Dataset against the live retrieval pipeline, not a mock. | Proposed |
-| FR-FV03-027 | Hit Rate@K and MRR must appear in the same `metric_breakdown` report as the platform's other evaluation metrics. | Proposed |
-| FR-FV03-028 | Hit Rate@K and MRR start as observability-only metrics; a numeric release-gate threshold is deferred until a real baseline exists. | Proposed |
+| FR-FV03-024 | `EvalCase` must carry an optional `expected_chunk_ids` field for retrieval ground truth. | Implemented |
+| FR-FV03-025 | A labeled Golden Dataset of real business questions against real seeded documents must exist, each with one or more expected chunk IDs. | Implemented |
+| FR-FV03-026 | The system must compute Hit Rate@K and MRR over the Golden Dataset against the live retrieval pipeline, not a mock. | Implemented |
+| FR-FV03-027 | Hit Rate@K and MRR must appear in the same `metric_breakdown` report as the platform's other evaluation metrics. | Implemented |
+| FR-FV03-028 | Hit Rate@K and MRR start as observability-only metrics; a numeric release-gate threshold is deferred until a real baseline exists. | Implemented |

@@ -5,6 +5,7 @@ import pytest
 from chatbi.knowledge_postgres_vector_source import (
     PostgresKnowledgeVectorSource,
     backfill_knowledge_embeddings,
+    parse_pgvector_embedding,
 )
 
 
@@ -54,6 +55,14 @@ class FakeKnowledgeConnection:
 class RaisingConnectFn:
     def __call__(self, database_url: str) -> Any:
         raise RuntimeError("connection failed")
+
+
+def test_parse_pgvector_embedding_parses_the_bracketed_text_format() -> None:
+    # Code-review follow-up: no pgvector Python type adapter is registered
+    # anywhere in this project, so callers must SELECT with an explicit
+    # ::text cast and parse the wire format themselves.
+    assert parse_pgvector_embedding("[0.1,0.2,0.3]") == (0.1, 0.2, 0.3)
+    assert parse_pgvector_embedding("[1,-2.5,0]") == (1.0, -2.5, 0.0)
 
 
 def test_top_chunk_ids_executes_exactly_one_sql_statement_with_owner_and_role_scoping() -> None:

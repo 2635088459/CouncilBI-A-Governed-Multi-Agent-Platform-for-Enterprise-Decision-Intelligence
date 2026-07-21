@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from time import monotonic
 
 from chatbi.api.models import (
@@ -43,6 +44,7 @@ from chatbi.core.contracts import (
 from chatbi.core.contracts import utc_now
 from chatbi.data_model import DataModelCatalog, build_default_data_model_catalog
 from chatbi.evaluation import BenchmarkExpectation, EvaluationObservation, EvaluationScorer
+from chatbi.evaluation_cases import load_golden_dataset_cases
 from chatbi.evaluation_repository import (
     EvalCase,
     EvalRunner,
@@ -76,6 +78,21 @@ from chatbi.trace_events import (
     TraceEventRecorder,
     TraceEventStatus,
 )
+
+
+@lru_cache(maxsize=1)
+def _golden_dataset_expected_chunk_ids_by_question() -> Mapping[str, tuple[str, ...]]:
+    """Loaded once per process: golden_dataset/cases.json's real-business
+    questions, keyed by normalized question text, for
+    ChatBIApplication._expected_chunk_ids_for_question() to look up. Cached
+    since it is re-read on every handle_eval_run() call otherwise, and the
+    bundled dataset file does not change at runtime.
+    """
+
+    return {
+        case.question.strip().lower(): case.expected_chunk_ids
+        for case in load_golden_dataset_cases()
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -1145,19 +1162,16 @@ class ChatBIApplication:
 
     def _expected_chunk_ids_for_question(self, question: str) -> tuple[str, ...]:
         """FR-FV03-024: opts a case into retrieval scoring only when its
-        question targets one of the real seeded ``knowledge.doc_chunks``
-        rows (migrations.py's ``KNOWLEDGE_RAG_SEED_SQL``); every other
-        question (SQL-only benchmarks, arbitrary caller-supplied text) has
-        no ground truth to score against and stays opted out via the
-        empty-tuple default, matching expected_sql_fragments' convention.
+        question exactly matches one of the real-business Golden Dataset's
+        own canonical questions (golden_dataset/cases.json — every label
+        there was verified against the real seeded content, see
+        load_golden_dataset_cases()'s docstring); every other question
+        (SQL-only benchmarks, arbitrary caller-supplied text) has no ground
+        truth to score against and stays opted out via the empty-tuple
+        default, matching expected_sql_fragments' convention.
         """
 
-        normalized = question.strip().lower()
-        if "revenue" in normalized and self._requires_citation(question):
-            return ("rag_revenue_policy_2026_chunk_1",)
-        if "support" in normalized and "ticket" in normalized:
-            return ("doc_support_ops_june_2026_chunk_1",)
-        return ()
+        return _golden_dataset_expected_chunk_ids_by_question().get(question.strip().lower(), ())
 
     def _evaluate_retrieval(
         self,

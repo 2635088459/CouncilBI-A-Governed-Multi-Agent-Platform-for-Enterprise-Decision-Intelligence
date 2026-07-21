@@ -551,6 +551,71 @@ ON CONFLICT (embedding_id) DO UPDATE SET
     vector_ref = EXCLUDED.vector_ref;
 """
 
+# FR-FV03-025 follow-up: ten more real business documents, spanning the
+# platform's actual data-model domains (orders/refunds/customers/products/
+# regions/web_events/support_tickets/marketing_campaigns — see
+# data_model.py's business_table_names()) plus this codebase's own
+# governance subsystems (SQL guardrail, PII masking, release gate). These
+# back the real-business Golden Dataset in golden_dataset/cases.json —
+# every (question, expected_chunk_id) pair there was verified by actually
+# running retrieve() against this exact content, not asserted from
+# unverified labels (same discipline as KNOWLEDGE_RAG_SEED_SQL above).
+KNOWLEDGE_RAG_GOLDEN_DATASET_SEED_SQL = """
+INSERT INTO knowledge.documents (source_id, title, doc_type, publish_time, business_tags, allowed_roles)
+VALUES
+    ('doc_refund_policy_2026', 'Refund policy and regional shipping delays', 'policy', '2026-04-10T00:00:00Z', ARRAY['refund', 'shipping', 'region'], ARRAY['analyst', 'admin']),
+    ('doc_marketing_campaign_review_2026', 'Marketing campaign spend and revenue attribution', 'weekly_report', '2026-06-05T00:00:00Z', ARRAY['marketing', 'campaign', 'revenue'], ARRAY['analyst', 'admin']),
+    ('doc_product_pricing_tier_2026', 'Product pricing tier changes', 'policy', '2026-05-03T00:00:00Z', ARRAY['pricing', 'product', 'tier'], ARRAY['analyst', 'admin']),
+    ('doc_customer_churn_analysis_2026', 'Customer churn analysis for the analytics tier', 'weekly_report', '2026-03-18T00:00:00Z', ARRAY['churn', 'customers', 'retention'], ARRAY['analyst', 'admin']),
+    ('doc_regional_sales_variance_2026', 'Regional sales variance', 'weekly_report', '2026-02-14T00:00:00Z', ARRAY['region', 'sales', 'variance'], ARRAY['analyst', 'admin']),
+    ('doc_web_conversion_funnel_2026', 'Web signup conversion funnel', 'weekly_report', '2026-01-20T00:00:00Z', ARRAY['onboarding', 'funnel', 'web'], ARRAY['analyst', 'admin']),
+    ('doc_sql_guardrail_policy_2026', 'SQL guardrail and dangerous query policy', 'policy', '2026-07-01T00:00:00Z', ARRAY['guardrail', 'sql', 'safety'], ARRAY['analyst', 'admin']),
+    ('doc_data_governance_pii_policy_2026', 'Data governance and PII masking policy', 'policy', '2026-03-02T00:00:00Z', ARRAY['governance', 'pii', 'compliance'], ARRAY['admin']),
+    ('doc_incident_response_runbook_2026', 'Incident response runbook', 'weekly_report', '2026-05-22T00:00:00Z', ARRAY['incident', 'oncall', 'reliability'], ARRAY['analyst', 'admin']),
+    ('doc_eval_quality_gate_policy_2026', 'Evaluation release gate policy', 'policy', '2026-06-12T00:00:00Z', ARRAY['evaluation', 'release', 'quality'], ARRAY['admin'])
+ON CONFLICT (source_id) DO UPDATE SET
+    title = EXCLUDED.title,
+    doc_type = EXCLUDED.doc_type,
+    publish_time = EXCLUDED.publish_time,
+    business_tags = EXCLUDED.business_tags,
+    allowed_roles = EXCLUDED.allowed_roles;
+
+INSERT INTO knowledge.doc_chunks (chunk_id, source_id, chunk_index, chunk_text, metadata)
+VALUES
+    ('doc_refund_policy_2026_chunk_1', 'doc_refund_policy_2026', 1, 'Refunds are issued when an order is cancelled within 30 days or a shipping delay exceeds the regional SLA. A spike in refund requests should be cross-checked against regional carrier delays before being attributed to product quality.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_marketing_campaign_review_2026_chunk_1', 'doc_marketing_campaign_review_2026', 1, 'Marketing campaign spend is tracked per campaign. When a campaign budget is paused mid-month, attributed revenue typically drops within the same reporting month, and this drop must not be confused with an organic demand decline.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_product_pricing_tier_2026_chunk_1', 'doc_product_pricing_tier_2026', 1, 'The Team pricing tier was reduced in price to widen the entry-level funnel. Any pricing tier change must be reflected in the product catalog before revenue-by-tier reports are regenerated.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_customer_churn_analysis_2026_chunk_1', 'doc_customer_churn_analysis_2026', 1, 'Customer churn increased for the analytics tier after a support SLA regression extended average ticket resolution time. Retention analysis must confirm whether unresolved tickets preceded cancellation.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_regional_sales_variance_2026_chunk_1', 'doc_regional_sales_variance_2026', 1, 'Regional sales variance in the west region is driven primarily by carrier shipping delays, not by a change in regional demand or pricing.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_web_conversion_funnel_2026_chunk_1', 'doc_web_conversion_funnel_2026', 1, 'Signup conversion improved after the web funnel redesign shortened the number of steps between account creation and first query. Onboarding completion is the canonical success marker for funnel reporting.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_sql_guardrail_policy_2026_chunk_1', 'doc_sql_guardrail_policy_2026', 1, 'Any SQL statement beginning with DROP, DELETE, UPDATE, INSERT, ALTER, or TRUNCATE is blocked by the guardrail before execution. Analysts needing a destructive operation must route it through a reviewed migration, not the chat query path.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_data_governance_pii_policy_2026_chunk_1', 'doc_data_governance_pii_policy_2026', 1, 'Personally identifiable fields such as email and phone number must be masked in observability logs before they are persisted. Restricted field access is recorded for compliance review.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_incident_response_runbook_2026_chunk_1', 'doc_incident_response_runbook_2026', 1, 'Incident response time improved after the on-call rotation was restructured for faster root-cause triage. P1 incidents must be escalated to the on-call engineer within 15 minutes of detection.', '{"fixture": "golden_dataset"}'::jsonb),
+    ('doc_eval_quality_gate_policy_2026_chunk_1', 'doc_eval_quality_gate_policy_2026', 1, 'A release is blocked from shipping when the overall evaluation score falls below 0.99 or the unsupported claim rate exceeds 2 percent. Retrieval Hit Rate and MRR are tracked as observability-only metrics and do not currently gate release.', '{"fixture": "golden_dataset"}'::jsonb)
+ON CONFLICT (source_id, chunk_index) DO UPDATE SET
+    chunk_id = EXCLUDED.chunk_id,
+    chunk_text = EXCLUDED.chunk_text,
+    metadata = EXCLUDED.metadata;
+
+INSERT INTO knowledge.doc_embeddings (embedding_id, chunk_id, embedding_model, embedding_dimensions, vector_ref)
+VALUES
+    ('doc_refund_policy_2026_embedding_1', 'doc_refund_policy_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_refund_policy_2026_chunk_1'),
+    ('doc_marketing_campaign_review_2026_embedding_1', 'doc_marketing_campaign_review_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_marketing_campaign_review_2026_chunk_1'),
+    ('doc_product_pricing_tier_2026_embedding_1', 'doc_product_pricing_tier_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_product_pricing_tier_2026_chunk_1'),
+    ('doc_customer_churn_analysis_2026_embedding_1', 'doc_customer_churn_analysis_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_customer_churn_analysis_2026_chunk_1'),
+    ('doc_regional_sales_variance_2026_embedding_1', 'doc_regional_sales_variance_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_regional_sales_variance_2026_chunk_1'),
+    ('doc_web_conversion_funnel_2026_embedding_1', 'doc_web_conversion_funnel_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_web_conversion_funnel_2026_chunk_1'),
+    ('doc_sql_guardrail_policy_2026_embedding_1', 'doc_sql_guardrail_policy_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_sql_guardrail_policy_2026_chunk_1'),
+    ('doc_data_governance_pii_policy_2026_embedding_1', 'doc_data_governance_pii_policy_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_data_governance_pii_policy_2026_chunk_1'),
+    ('doc_incident_response_runbook_2026_embedding_1', 'doc_incident_response_runbook_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_incident_response_runbook_2026_chunk_1'),
+    ('doc_eval_quality_gate_policy_2026_embedding_1', 'doc_eval_quality_gate_policy_2026_chunk_1', 'local-deterministic-v1', 8, 'pgvector://knowledge.doc_chunks/doc_eval_quality_gate_policy_2026_chunk_1')
+ON CONFLICT (embedding_id) DO UPDATE SET
+    chunk_id = EXCLUDED.chunk_id,
+    embedding_model = EXCLUDED.embedding_model,
+    embedding_dimensions = EXCLUDED.embedding_dimensions,
+    vector_ref = EXCLUDED.vector_ref;
+"""
+
 GOVERNANCE_POLICY_TABLES_SQL = """
 CREATE SCHEMA IF NOT EXISTS governance;
 CREATE TABLE IF NOT EXISTS governance.access_policies (
@@ -937,6 +1002,7 @@ BASE_MIGRATION_SQL_STATEMENTS = (
     SEMANTIC_REVENUE_SEED_SQL,
     KNOWLEDGE_RAG_TABLES_SQL,
     KNOWLEDGE_RAG_SEED_SQL,
+    KNOWLEDGE_RAG_GOLDEN_DATASET_SEED_SQL,
     RAG_V2_TABLES_SQL,
     ANALYTICS_V2_TABLES_SQL,
     AUTH_TABLES_SQL,

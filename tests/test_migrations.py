@@ -34,6 +34,7 @@ from chatbi.migrations import (
     KNOWLEDGE_DOC_CHUNKS_TABLE,
     KNOWLEDGE_DOC_EMBEDDINGS_TABLE,
     KNOWLEDGE_DOCUMENTS_TABLE,
+    KNOWLEDGE_RAG_GOLDEN_DATASET_SEED_SQL,
     KNOWLEDGE_RAG_SEED_SQL,
     KNOWLEDGE_RAG_TABLES_SQL,
     KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION,
@@ -119,6 +120,7 @@ def test_base_migration_sql_statements_are_ordered_for_dependencies() -> None:
         SEMANTIC_REVENUE_SEED_SQL,
         KNOWLEDGE_RAG_TABLES_SQL,
         KNOWLEDGE_RAG_SEED_SQL,
+        KNOWLEDGE_RAG_GOLDEN_DATASET_SEED_SQL,
         RAG_V2_TABLES_SQL,
         ANALYTICS_V2_TABLES_SQL,
         AUTH_TABLES_SQL,
@@ -249,6 +251,31 @@ def test_knowledge_rag_seed_sql_reproduces_required_rag_fixture() -> None:
     assert "'pgvector://knowledge.doc_chunks/rag_revenue_policy_2026_chunk_1'" in normalized_sql
     assert "'pgvector://knowledge.doc_chunks/doc_support_ops_june_2026_chunk_1'" in normalized_sql
     assert "ON CONFLICT (embedding_id) DO UPDATE SET" in normalized_sql
+
+
+def test_knowledge_rag_golden_dataset_seed_sql_covers_all_ten_documents() -> None:
+    # Backs golden_dataset/cases.json's real-business Golden Dataset — every
+    # source_id referenced there must exist here, in the real production
+    # seed data, not only in an in-memory test fixture.
+    normalized_sql = " ".join(KNOWLEDGE_RAG_GOLDEN_DATASET_SEED_SQL.split())
+
+    expected_source_ids = (
+        "doc_refund_policy_2026",
+        "doc_marketing_campaign_review_2026",
+        "doc_product_pricing_tier_2026",
+        "doc_customer_churn_analysis_2026",
+        "doc_regional_sales_variance_2026",
+        "doc_web_conversion_funnel_2026",
+        "doc_sql_guardrail_policy_2026",
+        "doc_data_governance_pii_policy_2026",
+        "doc_incident_response_runbook_2026",
+        "doc_eval_quality_gate_policy_2026",
+    )
+    for source_id in expected_source_ids:
+        assert f"'{source_id}'" in normalized_sql
+        assert f"'{source_id}_chunk_1'" in normalized_sql
+        assert f"'{source_id}_embedding_1'" in normalized_sql
+        assert f"'pgvector://knowledge.doc_chunks/{source_id}_chunk_1'" in normalized_sql
 
 
 def test_rag_v2_tables_sql_creates_spec_v2_rag_tables() -> None:

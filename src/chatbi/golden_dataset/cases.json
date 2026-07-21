@@ -1,0 +1,122 @@
+[
+  {
+    "case_id": "golden_revenue_anomaly",
+    "question": "What factors explain a month-over-month revenue anomaly?",
+    "expected_chunk_ids": ["rag_revenue_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_revenue_calculation",
+    "question": "How is revenue calculated for the platform?",
+    "expected_chunk_ids": ["rag_revenue_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_support_ticket_volume",
+    "question": "Why did support ticket volume increase in June?",
+    "expected_chunk_ids": ["doc_support_ops_june_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_support_resolution_time",
+    "question": "Did support resolution time improve after the workspace rollout?",
+    "expected_chunk_ids": ["doc_support_ops_june_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_refund_spike",
+    "question": "Why did refund requests spike this quarter?",
+    "expected_chunk_ids": ["doc_refund_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_refund_policy",
+    "question": "What is the refund policy for shipping delays?",
+    "expected_chunk_ids": ["doc_refund_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_campaign_revenue_drop",
+    "question": "Why did attributed revenue drop after the marketing campaign paused?",
+    "expected_chunk_ids": ["doc_marketing_campaign_review_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_campaign_spend_tracking",
+    "question": "How is marketing campaign spend tracked?",
+    "expected_chunk_ids": ["doc_marketing_campaign_review_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_pricing_tier_change",
+    "question": "What changed about the Team pricing tier?",
+    "expected_chunk_ids": ["doc_product_pricing_tier_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_pricing_tier_reporting",
+    "question": "What needs to happen before revenue-by-tier reports regenerate?",
+    "expected_chunk_ids": ["doc_product_pricing_tier_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_churn_analytics_tier",
+    "question": "Why did churn increase for the analytics tier?",
+    "expected_chunk_ids": ["doc_customer_churn_analysis_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_churn_support_link",
+    "question": "Does support ticket resolution time affect customer churn?",
+    "expected_chunk_ids": ["doc_customer_churn_analysis_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_regional_sales_variance",
+    "question": "Why is west region sales performance different from other regions?",
+    "expected_chunk_ids": ["doc_regional_sales_variance_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_regional_shipping_delay",
+    "question": "Are regional sales differences caused by shipping delays?",
+    "expected_chunk_ids": ["doc_regional_sales_variance_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_signup_conversion",
+    "question": "Why did signup conversion improve?",
+    "expected_chunk_ids": ["doc_web_conversion_funnel_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_onboarding_success_marker",
+    "question": "What counts as a successful onboarding completion?",
+    "expected_chunk_ids": ["doc_web_conversion_funnel_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_dangerous_sql_block",
+    "question": "What SQL statements does the guardrail block?",
+    "expected_chunk_ids": ["doc_sql_guardrail_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_destructive_sql_process",
+    "question": "How should an analyst run a destructive SQL operation safely?",
+    "expected_chunk_ids": ["doc_sql_guardrail_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_pii_masking",
+    "question": "How is personally identifiable information handled in logs?",
+    "expected_chunk_ids": ["doc_data_governance_pii_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_restricted_field_audit",
+    "question": "Is restricted field access recorded anywhere for compliance?",
+    "expected_chunk_ids": ["doc_data_governance_pii_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_incident_response_time",
+    "question": "Why did incident response time improve?",
+    "expected_chunk_ids": ["doc_incident_response_runbook_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_p1_escalation",
+    "question": "How quickly must a P1 incident be escalated to on-call?",
+    "expected_chunk_ids": ["doc_incident_response_runbook_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_release_gate_threshold",
+    "question": "What blocks a release from shipping in the evaluation gate?",
+    "expected_chunk_ids": ["doc_eval_quality_gate_policy_2026_chunk_1"]
+  },
+  {
+    "case_id": "golden_retrieval_metrics_gating",
+    "question": "Do Hit Rate and MRR currently block a release?",
+    "expected_chunk_ids": ["doc_eval_quality_gate_policy_2026_chunk_1"]
+  }
+]

@@ -33,6 +33,6 @@ Roughly **1.5–2 person-days**: the code change itself is small (one new step, 
 
 | ID | Requirement | Status |
 |---|---|---|
-| FR-FV03-021 | `retrieve()` must re-score the top `2 * top_k` hybrid-ranked candidates with a cross-encoder model before dedupe and truncation. | Proposed |
-| FR-FV03-022 | `RetrievalStats.reranked_count` must reflect the number of candidates that actually passed through the cross-encoder rerank pass. | Proposed |
-| FR-FV03-023 | If the reranker is unavailable or errors, retrieval must fall back to the pre-rerank hybrid ordering rather than failing the request. | Proposed |
+| FR-FV03-021 | `retrieve()` must re-score the top `2 * top_k` hybrid-ranked candidates with a cross-encoder model before dedupe and truncation. | Implemented |
+| FR-FV03-022 | `RetrievalStats.reranked_count` must reflect the number of candidates that actually passed through the cross-encoder rerank pass. | Implemented |
+| FR-FV03-023 | If the reranker is unavailable or errors, retrieval must fall back to the pre-rerank hybrid ordering rather than failing the request. | Implemented |

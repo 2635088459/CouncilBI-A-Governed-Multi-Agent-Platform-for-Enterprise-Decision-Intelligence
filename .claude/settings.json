@@ -26,7 +26,14 @@
       "Bash(python -m pytest tests/ -q -x --timeout=300)",
       "Bash(python -m pytest tests/ -q)",
       "Bash(python -m pytest tests/test_backend_api_boundaries.py tests/test_chat_query_file_rag_analytics.py tests/test_http_app.py tests/test_final_submission_package.py tests/test_docker_compose_architecture.py tests/test_react_vite_frontend.py -q)",
-      "Bash(python -m pytest tests/test_chat_query_file_rag_analytics.py::test_file_query_layers_in_knowledge_base_rag_evidence_for_a_why_question -q)"
+      "Bash(python -m pytest tests/test_chat_query_file_rag_analytics.py::test_file_query_layers_in_knowledge_base_rag_evidence_for_a_why_question -q)",
+      "Bash(python -m pyright src/chatbi/migrations.py)",
+      "Bash(python -m pytest tests/test_migrations.py -q)",
+      "Bash(grep -n \"^    KNOWLEDGE_RAG_SEED_SQL,$\\\\|from chatbi.migrations import\" /Users/aaronshan2635088459/Desktop/Governed-Multi-Agent-ChatBI-Platform-for-Enterprise-Decision-Intelligence/tests/test_migrations.py)",
+      "Bash(python -m pyright src/chatbi/application/app.py src/chatbi/evaluation_cases.py)",
+      "Bash(python -m pytest tests/test_app.py tests/test_evaluation_cases.py tests/test_migrations.py -q)",
+      "Bash(python -m pytest tests/test_golden_dataset_cases.py -q)",
+      "Bash(python -m pyright tests/test_golden_dataset_cases.py src/chatbi/evaluation_cases.py src/chatbi/application/app.py src/chatbi/migrations.py tests/test_migrations.py tests/test_app.py)"
     ]
   }
 }

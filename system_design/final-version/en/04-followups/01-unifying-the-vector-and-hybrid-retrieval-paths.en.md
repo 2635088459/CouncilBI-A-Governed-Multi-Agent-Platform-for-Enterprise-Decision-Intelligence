@@ -32,7 +32,7 @@ Roughly **1.5–2 person-days**: adding the optional constructor/method paramete
 
 | ID | Requirement | Status |
 |---|---|---|
-| FR-FV03-014 | `InMemoryKnowledgeStore` must accept an optional `EmbeddingClient` and use it for chunk embedding when provided, falling back to the existing deterministic hash-bucket embedding when not. | Proposed |
-| FR-FV03-015 | The knowledge-store ingestion path must read the same `runtime_config.embedding_provider`/`embedding_model` settings the vector-only pipeline already reads, so one configuration switch controls both. | Proposed |
-| FR-FV03-016 | The orchestrator's `RagAgentRunner` construction must always pass `vector_retriever=None`, so the hybrid-scoring path is the only retrieval mechanism reachable from a live chat query. | Proposed |
-| FR-FV03-017 | This change must not regress any existing `test_knowledge_store.py` / `test_rag_agent.py` test — those tests continue to exercise the deterministic embedding path by omitting `embedding_client`. | Proposed |
+| FR-FV03-014 | `InMemoryKnowledgeStore` must accept an optional `EmbeddingClient` and use it for chunk embedding when provided, falling back to the existing deterministic hash-bucket embedding when not. | Implemented |
+| FR-FV03-015 | The knowledge-store ingestion path must read the same `runtime_config.embedding_provider`/`embedding_model` settings the vector-only pipeline already reads, so one configuration switch controls both. | Implemented |
+| FR-FV03-016 | The orchestrator's `RagAgentRunner` construction must always pass `vector_retriever=None`, so the hybrid-scoring path is the only retrieval mechanism reachable from a live chat query. | Implemented |
+| FR-FV03-017 | This change must not regress any existing `test_knowledge_store.py` / `test_rag_agent.py` test — those tests continue to exercise the deterministic embedding path by omitting `embedding_client`. | Implemented |

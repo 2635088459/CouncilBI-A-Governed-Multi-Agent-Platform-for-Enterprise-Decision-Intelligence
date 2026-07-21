@@ -40,6 +40,6 @@ Roughly **0.5–1 person-day**. This is the cheapest of the four phases: it is a
 
 | ID | Requirement | Status |
 |---|---|---|
-| FR-FV03-018 | Keyword scoring must use BM25 (term-frequency/inverse-document-frequency/length-normalized), computed over the permission-filtered candidate set per request, not a pre-built global index. | Proposed |
-| FR-FV03-019 | Keyword tokenization must support Chinese-language text, not only ASCII word tokens. | Proposed |
-| FR-FV03-020 | BM25 scores must be normalized into a comparable range with the existing cosine-similarity term before the 0.60/0.35 fusion weights are applied. | Proposed |
+| FR-FV03-018 | Keyword scoring must use BM25 (term-frequency/inverse-document-frequency/length-normalized), computed over the permission-filtered candidate set per request, not a pre-built global index. | Implemented |
+| FR-FV03-019 | Keyword tokenization must support Chinese-language text, not only ASCII word tokens. | Implemented |
+| FR-FV03-020 | BM25 scores must be normalized into a comparable range with the existing cosine-similarity term before the 0.60/0.35 fusion weights are applied. | Implemented |

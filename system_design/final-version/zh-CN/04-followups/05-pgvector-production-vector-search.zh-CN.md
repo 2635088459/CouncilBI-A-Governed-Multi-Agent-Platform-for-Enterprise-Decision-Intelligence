@@ -106,8 +106,8 @@ class PostgresKnowledgeVectorSource:
 
 | ID | 需求 | 状态 |
 |---|---|---|
-| FR-FV03-029 | 必须启用 `pgvector` 扩展,`knowledge.doc_embeddings` 必须携带一个带 HNSW 索引的 `vector` 类型列。 | 待实现 |
-| FR-FV03-030 | `PostgresKnowledgeVectorSource` 必须实现本文档定义的 `VectorCandidateSource` 协议——不是已退役纯向量管线里那个不相关的 `VectorStore` 协议。 | 待实现 |
-| FR-FV03-031 | `owner_user_id`、`allowed_roles`、`doc_type`/`doc_types` 的作用域限定必须在 SQL 查询内部完成,不能是应用代码里检索之后的过滤。共享可见性(Spec FV10.2 的授权)是本阶段明确排除在外的已知缺口(§3.2)。 | 待实现 |
-| FR-FV03-032 | `InMemoryKnowledgeStore.retrieve()` 内部"生成向量候选"这一步,必须能通过一个可选构造参数在内存扫描和 `PostgresKnowledgeVectorSource` 之间切换,且不改动 BM25 打分、融合或重排序逻辑;`retrieve()` 现有的 Python 端权限过滤必须继续跑在返回的候选集合之上。 | 待实现 |
-| FR-FV03-033 | 必须有一次回填迁移,为本阶段之前摄入的每个 chunk 填充真实 embedding 向量;必须有一个 owner 隔离测试,在这个存储对外服务真实流量之前验证 SQL 层面的 `owner_user_id` 作用域限定。 | 待实现 |
+| FR-FV03-029 | 必须启用 `pgvector` 扩展,`knowledge.doc_embeddings` 必须携带一个带 HNSW 索引的 `vector` 类型列。 | 已实现 |
+| FR-FV03-030 | `PostgresKnowledgeVectorSource` 必须实现本文档定义的 `VectorCandidateSource` 协议——不是已退役纯向量管线里那个不相关的 `VectorStore` 协议。 | 已实现 |
+| FR-FV03-031 | `owner_user_id`、`allowed_roles`、`doc_type`/`doc_types` 的作用域限定必须在 SQL 查询内部完成,不能是应用代码里检索之后的过滤。共享可见性(Spec FV10.2 的授权)是本阶段明确排除在外的已知缺口(§3.2)。 | 已实现 |
+| FR-FV03-032 | `InMemoryKnowledgeStore.retrieve()` 内部"生成向量候选"这一步,必须能通过一个可选构造参数在内存扫描和 `PostgresKnowledgeVectorSource` 之间切换,且不改动 BM25 打分、融合或重排序逻辑;`retrieve()` 现有的 Python 端权限过滤必须继续跑在返回的候选集合之上。 | 已实现 |
+| FR-FV03-033 | 必须有一次回填迁移,为本阶段之前摄入的每个 chunk 填充真实 embedding 向量;必须有一个 owner 隔离测试,在这个存储对外服务真实流量之前验证 SQL 层面的 `owner_user_id` 作用域限定。 | 已实现 |

@@ -200,6 +200,7 @@ from chatbi.knowledge import (
 from chatbi.knowledge_postgres_vector_source import (
     PostgresKnowledgeVectorSource,
     VectorCandidateSource,
+    parse_pgvector_embedding,
 )
 from chatbi.orchestration import AnalyticsServiceRunner, QuestionClassifier, ResultMerger, TaskType
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
@@ -655,32 +656,78 @@ def _load_knowledge_store_from_db(
                         owner_user_id=owner_user_id,
                     )
                 )
-            cur.execute(
-                "SELECT chunk_id, source_id, chunk_index, chunk_text"
-                " FROM knowledge.doc_chunks ORDER BY source_id, chunk_index"
-            )
-            for row in cur.fetchall():
-                chunk_id, source_id, chunk_index, chunk_text = row
-                if source_id not in store._documents_by_source_id:
-                    continue
-                store.save_chunk(
-                    DocumentChunk(
-                        chunk_id=chunk_id,
-                        source_id=source_id,
-                        chunk_index=chunk_index,
-                        chunk_text=chunk_text,
-                    )
+            # Code-review follow-up: FR-FV03-033's backfill migration already
+            # computed a real embedding for every chunk once — recomputing
+            # it again via embedding_client on every process restart wastes
+            # one embedding-provider call per chunk at boot time and can
+            # drift from the vector pgvector's own candidate-narrowing step
+            # queries. Reading the persisted knowledge.doc_embeddings.embedding
+            # column back is only attempted when vector_candidate_source is
+            # configured — the same signal _build_default_chatbi_application
+            # uses to mean "the pgvector migration has been applied" — so
+            # deployments that never ran that migration (the column doesn't
+            # exist there) keep the original recompute-at-load query below
+            # completely unchanged.
+            if vector_candidate_source is not None:
+                cur.execute(
+                    "SELECT c.chunk_id, c.source_id, c.chunk_index, c.chunk_text,"
+                    " e.embedding::text"
+                    " FROM knowledge.doc_chunks c"
+                    " LEFT JOIN knowledge.doc_embeddings e ON e.chunk_id = c.chunk_id"
+                    " ORDER BY c.source_id, c.chunk_index"
                 )
-                store.save_embedding(
-                    ChunkEmbedding(
-                        embedding_id=f"{chunk_id}_emb",
-                        chunk_id=chunk_id,
-                        embedding_vector=store.embed_text(chunk_text),
+                for row in cur.fetchall():
+                    chunk_id, source_id, chunk_index, chunk_text, embedding_text = row
+                    if not _has_known_document(store, source_id):
+                        continue
+                    embedding_vector = (
+                        parse_pgvector_embedding(embedding_text)
+                        if embedding_text is not None
+                        else store.embed_text(chunk_text)
                     )
+                    _save_chunk_and_embedding(
+                        store, chunk_id, source_id, chunk_index, chunk_text, embedding_vector
+                    )
+            else:
+                cur.execute(
+                    "SELECT chunk_id, source_id, chunk_index, chunk_text"
+                    " FROM knowledge.doc_chunks ORDER BY source_id, chunk_index"
                 )
+                for row in cur.fetchall():
+                    chunk_id, source_id, chunk_index, chunk_text = row
+                    if not _has_known_document(store, source_id):
+                        continue
+                    _save_chunk_and_embedding(
+                        store, chunk_id, source_id, chunk_index, chunk_text, store.embed_text(chunk_text)
+                    )
     except Exception:
         pass  # DB not ready yet; fall back to empty store
     return store
+
+
+def _has_known_document(store: InMemoryKnowledgeStore, source_id: str) -> bool:
+    return source_id in store._documents_by_source_id  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+
+
+def _save_chunk_and_embedding(
+    store: InMemoryKnowledgeStore,
+    chunk_id: str,
+    source_id: str,
+    chunk_index: int,
+    chunk_text: str,
+    embedding_vector: tuple[float, ...],
+) -> None:
+    store.save_chunk(
+        DocumentChunk(
+            chunk_id=chunk_id,
+            source_id=source_id,
+            chunk_index=chunk_index,
+            chunk_text=chunk_text,
+        )
+    )
+    store.save_embedding(
+        ChunkEmbedding(embedding_id=f"{chunk_id}_emb", chunk_id=chunk_id, embedding_vector=embedding_vector)
+    )
 
 
 def _build_default_chatbi_application(

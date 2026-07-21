@@ -413,7 +413,10 @@ def test_handle_eval_run_computes_retrieval_metrics_against_the_live_knowledge_s
     # retrieval_metrics from the day it was written, but handle_eval_run()
     # never computed or passed them — this is Golden-Dataset-style
     # retrieval scoring against the real, seeded production chunk id
-    # (migrations.py's KNOWLEDGE_RAG_SEED_SQL), not a mock.
+    # (migrations.py's KNOWLEDGE_RAG_SEED_SQL), not a mock. The question
+    # below is one of golden_dataset/cases.json's own canonical questions
+    # (golden_revenue_calculation) — _expected_chunk_ids_for_question()
+    # looks up an exact match there, not a keyword heuristic.
     knowledge_store = InMemoryKnowledgeStore()
     knowledge_store.save_document(
         KnowledgeDocument(
@@ -441,7 +444,7 @@ def test_handle_eval_run_computes_retrieval_metrics_against_the_live_knowledge_s
         trace_id="trc_eval_retrieval",
         payload=EvalRunRequestPayload(
             eval_suite_id="retrieval_smoke",
-            questions=("Why did revenue change?",),
+            questions=("How is revenue calculated for the platform?",),
             locale=Locale.EN,
             role=UserRole.ANALYST,
         ),

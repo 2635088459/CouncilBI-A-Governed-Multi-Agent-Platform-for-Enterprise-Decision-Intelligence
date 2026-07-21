@@ -60,8 +60,8 @@ def reciprocal_rank(retrieved_chunk_ids: tuple[str, ...], expected_chunk_ids: tu
 
 | ID | 需求 | 状态 |
 |---|---|---|
-| FR-FV03-024 | `EvalCase` 必须携带可选的 `expected_chunk_ids` 字段,作为检索的 ground truth。 | 待实现 |
-| FR-FV03-025 | 必须存在一份针对真实 seed 文档、标注了真实业务问题的 Golden Dataset,每题标注一个或多个预期 chunk ID。 | 待实现 |
-| FR-FV03-026 | 系统必须在真实检索管线(而非 mock)上,针对 Golden Dataset 计算 Hit Rate@K 和 MRR。 | 待实现 |
-| FR-FV03-027 | Hit Rate@K 和 MRR 必须出现在和平台其他评估指标同一份 `metric_breakdown` 报告里。 | 待实现 |
-| FR-FV03-028 | Hit Rate@K 和 MRR 初期仅作为可观测性指标;发布门禁的数值阈值推迟到有真实基线之后再定。 | 待实现 |
+| FR-FV03-024 | `EvalCase` 必须携带可选的 `expected_chunk_ids` 字段,作为检索的 ground truth。 | 已实现 |
+| FR-FV03-025 | 必须存在一份针对真实 seed 文档、标注了真实业务问题的 Golden Dataset,每题标注一个或多个预期 chunk ID。 | 已实现 |
+| FR-FV03-026 | 系统必须在真实检索管线(而非 mock)上,针对 Golden Dataset 计算 Hit Rate@K 和 MRR。 | 已实现 |
+| FR-FV03-027 | Hit Rate@K 和 MRR 必须出现在和平台其他评估指标同一份 `metric_breakdown` 报告里。 | 已实现 |
+| FR-FV03-028 | Hit Rate@K 和 MRR 初期仅作为可观测性指标;发布门禁的数值阈值推迟到有真实基线之后再定。 | 已实现 |

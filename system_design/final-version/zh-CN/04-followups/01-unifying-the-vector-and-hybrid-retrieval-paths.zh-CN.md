@@ -32,7 +32,7 @@
 
 | ID | 需求 | 状态 |
 |---|---|---|
-| FR-FV03-014 | `InMemoryKnowledgeStore` 必须支持可选注入 `EmbeddingClient`,传入时用它做 chunk embedding,未传入时回退到现有的确定性哈希分桶 embedding。 | 待实现 |
-| FR-FV03-015 | 知识库的摄入路径必须读取纯向量管线已在读取的同一份 `runtime_config.embedding_provider`/`embedding_model` 配置,做到一个开关同时控制两处。 | 待实现 |
-| FR-FV03-016 | 编排器构造 `RagAgentRunner` 时必须始终传 `vector_retriever=None`,确保线上聊天查询唯一可达的检索机制是混合打分路径。 | 待实现 |
-| FR-FV03-017 | 本次改动不得让 `test_knowledge_store.py`/`test_rag_agent.py` 中任何现有测试回归——这些测试通过省略 `embedding_client` 继续走确定性 embedding 路径。 | 待实现 |
+| FR-FV03-014 | `InMemoryKnowledgeStore` 必须支持可选注入 `EmbeddingClient`,传入时用它做 chunk embedding,未传入时回退到现有的确定性哈希分桶 embedding。 | 已实现 |
+| FR-FV03-015 | 知识库的摄入路径必须读取纯向量管线已在读取的同一份 `runtime_config.embedding_provider`/`embedding_model` 配置,做到一个开关同时控制两处。 | 已实现 |
+| FR-FV03-016 | 编排器构造 `RagAgentRunner` 时必须始终传 `vector_retriever=None`,确保线上聊天查询唯一可达的检索机制是混合打分路径。 | 已实现 |
+| FR-FV03-017 | 本次改动不得让 `test_knowledge_store.py`/`test_rag_agent.py` 中任何现有测试回归——这些测试通过省略 `embedding_client` 继续走确定性 embedding 路径。 | 已实现 |

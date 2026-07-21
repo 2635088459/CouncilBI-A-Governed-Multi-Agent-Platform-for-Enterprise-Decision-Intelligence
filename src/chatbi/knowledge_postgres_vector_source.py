@@ -14,6 +14,20 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol
 
 
+def parse_pgvector_embedding(value: str) -> tuple[float, ...]:
+    """Parses pgvector's canonical text output (e.g. ``'[0.1,0.2,0.3]'``)
+    back into a plain float tuple.
+
+    No pgvector Python type adapter is registered anywhere in this project
+    (see ``top_chunk_ids``'s own comment on the ``::vector`` cast) — callers
+    must ``SELECT`` the column with an explicit ``::text`` cast and pass the
+    result here, rather than relying on psycopg's default type mapping for
+    an OID it has no adapter for.
+    """
+
+    return tuple(float(component) for component in value.strip("[]").split(","))
+
+
 class VectorCandidateSource(Protocol):
     """FR-FV03-030: given a query embedding, return the nearest chunk ids
     (and their cosine distance, nearest first), scoped to what the

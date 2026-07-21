@@ -33,6 +33,6 @@ selected_records = selected_records[: query.top_k]                              
 
 | ID | 需求 | 状态 |
 |---|---|---|
-| FR-FV03-021 | `retrieve()` 必须在去重和截断之前,用 cross-encoder 模型对混合打分排名前 `2 * top_k` 的候选重新打分。 | 待实现 |
-| FR-FV03-022 | `RetrievalStats.reranked_count` 必须反映真正经过 cross-encoder 重排序的候选数量。 | 待实现 |
-| FR-FV03-023 | 若重排序模型不可用或报错,检索必须回退到重排序前的混合排序,而不是让请求失败。 | 待实现 |
+| FR-FV03-021 | `retrieve()` 必须在去重和截断之前,用 cross-encoder 模型对混合打分排名前 `2 * top_k` 的候选重新打分。 | 已实现 |
+| FR-FV03-022 | `RetrievalStats.reranked_count` 必须反映真正经过 cross-encoder 重排序的候选数量。 | 已实现 |
+| FR-FV03-023 | 若重排序模型不可用或报错,检索必须回退到重排序前的混合排序,而不是让请求失败。 | 已实现 |

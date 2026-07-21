@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import cast
 
 from chatbi.evaluation_repository import EvalCase
+
+# FR-FV03-025 follow-up: the real-business Golden Dataset (FR-FV03-025) lives
+# as data, not Python literals, so business reviewers can add/edit cases via
+# a JSON file + PR review without touching test or application code. Bundled
+# under src/chatbi/ (not a top-level repo folder) so it ships in the backend
+# Docker image, which only COPYs src/ (see Dockerfile.backend).
+_GOLDEN_DATASET_CASES_PATH = Path(__file__).parent / "golden_dataset" / "cases.json"
 
 
 def load_eval_cases(raw_cases: Sequence[Mapping[str, object]]) -> tuple[EvalCase, ...]:
@@ -20,6 +29,21 @@ def load_eval_cases(raw_cases: Sequence[Mapping[str, object]]) -> tuple[EvalCase
         seen_case_ids.add(case.case_id)
         cases.append(case)
     return tuple(cases)
+
+
+def load_golden_dataset_cases(path: Path | None = None) -> tuple[EvalCase, ...]:
+    """FR-FV03-025/026: loads the real-business retrieval Golden Dataset.
+
+    Every (question, expected_chunk_ids) pair in the bundled file was
+    verified by actually running retrieve() against the real seeded content
+    (migrations.py's KNOWLEDGE_RAG_GOLDEN_DATASET_SEED_SQL), not asserted
+    from unverified labels — see test_retrieval_evaluation.py's own
+    self-verification test for the same discipline applied here.
+    """
+
+    active_path = path or _GOLDEN_DATASET_CASES_PATH
+    raw_cases = json.loads(active_path.read_text(encoding="utf-8"))
+    return load_eval_cases(raw_cases)
 
 
 def _eval_case_from_mapping(raw_case: Mapping[str, object], index: int) -> EvalCase:
