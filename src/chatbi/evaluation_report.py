@@ -126,7 +126,7 @@ def _metric_breakdown(
     scores: tuple[EvalScore, ...],
     sql_safety_score: float,
 ) -> Mapping[str, float]:
-    return {
+    breakdown = {
         "sql_correct": _bool_score(tuple(score.sql_correct for score in scores)),
         "sql_safety": sql_safety_score,
         "rag_faithfulness": _optional_bool_score(
@@ -134,6 +134,20 @@ def _metric_breakdown(
         ),
         "answer_quality": _average(tuple(score.answer_quality_score for score in scores)),
     }
+    # Code-review fix (Spec FV03.4 gap): retrieval_hit_rate/retrieval_mrr
+    # now survive persist-then-reload, the same "None means not scored"
+    # convention rag_faithfulness already uses above — only present when
+    # at least one persisted score actually carries a retrieval result.
+    retrieval_hits = tuple(
+        score.retrieval_hit_at_3 for score in scores if score.retrieval_hit_at_3 is not None
+    )
+    retrieval_ranks = tuple(
+        score.retrieval_reciprocal_rank for score in scores if score.retrieval_reciprocal_rank is not None
+    )
+    if retrieval_hits or retrieval_ranks:
+        breakdown["retrieval_hit_rate"] = _optional_bool_score(retrieval_hits)
+        breakdown["retrieval_mrr"] = _average(retrieval_ranks)
+    return breakdown
 
 
 def _failure_summary(failure: EvalFailureRecord) -> EvalFailureSummary:

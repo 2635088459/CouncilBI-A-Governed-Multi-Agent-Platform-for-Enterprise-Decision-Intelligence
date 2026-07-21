@@ -22,6 +22,10 @@ class EvaluationMetric(StrEnum):
     RAG_FAITHFULNESS = "rag_faithfulness"
     LATENCY_P95 = "latency_p95"
     UNSUPPORTED_CLAIM_RATE = "unsupported_claim_rate"
+    # FR-FV03-027 (Spec FV03.4): observability-only (FR-FV03-028) —
+    # neither member gates ReleaseGatePolicy._release_gate_passed().
+    RETRIEVAL_HIT_RATE = "retrieval_hit_rate"
+    RETRIEVAL_MRR = "retrieval_mrr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +85,15 @@ class EvaluationScorer:
         eval_suite_id: str,
         observations: tuple[EvaluationObservation, ...],
         expectations: Mapping[str, BenchmarkExpectation],
+        retrieval_metrics: Mapping[str, float] | None = None,
     ) -> EvalRunResultPayload:
+        """FR-FV03-027: ``retrieval_metrics`` is the caller-computed output
+        of ``RetrievalEvaluator.aggregate()`` (Spec FV03.4) for whichever
+        Golden Dataset cases this suite included, if any — this method does
+        not run retrieval evaluation itself, since that needs a live
+        ``retrieve_fn`` this answer-level scorer has no access to.
+        """
+
         case_results = tuple(
             self.score_case(
                 observation=observation,
@@ -89,7 +101,9 @@ class EvaluationScorer:
             )
             for observation in observations
         )
-        metric_breakdown = self._metric_breakdown(observations, case_results, expectations)
+        metric_breakdown = self._metric_breakdown(
+            observations, case_results, expectations, retrieval_metrics
+        )
         overall_score = self._average(tuple(case_result.score for case_result in case_results))
         passed_cases = sum(1 for case_result in case_results if case_result.passed)
 
@@ -143,6 +157,7 @@ class EvaluationScorer:
         observations: tuple[EvaluationObservation, ...],
         case_results: tuple[EvalCaseResultPayload, ...],
         expectations: Mapping[str, BenchmarkExpectation],
+        retrieval_metrics: Mapping[str, float] | None = None,
     ) -> Mapping[str, float]:
         sql_accuracy_scores: list[float] = []
         sql_safety_scores: list[float] = []
@@ -156,7 +171,7 @@ class EvaluationScorer:
             routing_scores.append(self._agent_routing_score(observation, expectation))
             rag_scores.append(self._rag_faithfulness_score(observation, expectation))
 
-        return {
+        breakdown = {
             EvaluationMetric.SQL_ACCURACY.value: self._average(tuple(sql_accuracy_scores)),
             EvaluationMetric.SQL_SAFETY.value: self._average(tuple(sql_safety_scores)),
             EvaluationMetric.AGENT_ROUTING.value: self._average(tuple(routing_scores)),
@@ -165,6 +180,16 @@ class EvaluationScorer:
             EvaluationMetric.UNSUPPORTED_CLAIM_RATE.value: self._unsupported_claim_rate(observations),
             "answer_success": self._average(tuple(result.score for result in case_results)),
         }
+        # FR-FV03-027: only present when the caller actually ran retrieval
+        # evaluation for this suite (Spec FV03.4) — a suite with no Golden
+        # Dataset cases simply omits these keys rather than reporting a
+        # meaningless default.
+        if retrieval_metrics is not None:
+            breakdown[EvaluationMetric.RETRIEVAL_HIT_RATE.value] = retrieval_metrics.get(
+                "retrieval_hit_rate", 1.0
+            )
+            breakdown[EvaluationMetric.RETRIEVAL_MRR.value] = retrieval_metrics.get("retrieval_mrr", 1.0)
+        return breakdown
 
     def _release_gate_passed(
         self,

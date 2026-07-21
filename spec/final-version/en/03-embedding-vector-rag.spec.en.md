@@ -153,3 +153,7 @@ Implemented source module:
 | NFR-FV03-001 | AC-FV03-001 | TC-FV03-008 |
 | NFR-FV03-003 | AC-FV03-001 | TC-FV03-001 |
 | NFR-FV03-004 | AC-FV03-002 | TC-FV03-005 |
+
+## 9. Follow-Ups
+
+A code-level audit of the retrieval pipeline actually implemented against this spec found real gaps behind what looked, at the design level, like a complete hybrid-search RAG system: a fake hash-bucket embedding on one retrieval path, Jaccard token overlap standing in for BM25, a "rerank" stage that never re-scored anything, and no retrieval-specific evaluation metric anywhere in the eval suite. See [04-followups/](04-followups/README.en.md) for the specs that close each gap, continuing this spec's own FR-/NFR-/AC-/TC- numbering.

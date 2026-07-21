@@ -34,6 +34,12 @@ class RuntimeConfig:
     file_storage_root: str | None = None
     conversation_context_turns: int = 5
     file_conversation_context_turns: int = 2
+    # Code-review fix (Spec FV03.3/FV03.5 gap): both default to False so
+    # enabling either is a deliberate operator action, not an automatic
+    # behavior change on deploy — matches this project's existing
+    # opt-in-via-env-var convention (embedding_provider, vector_store_url).
+    reranker_enabled: bool = False
+    pgvector_search_enabled: bool = False
 
     @property
     def postgresql_configured(self) -> bool:
@@ -112,7 +118,15 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         file_conversation_context_turns=_positive_int(
             runtime_env.get("CHATBI_FILE_CONVERSATION_CONTEXT_TURNS"), 2
         ),
+        reranker_enabled=_flag_enabled(runtime_env.get("CHATBI_RERANKER_ENABLED")),
+        pgvector_search_enabled=_flag_enabled(runtime_env.get("CHATBI_PGVECTOR_SEARCH_ENABLED")),
     )
+
+
+def _flag_enabled(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _non_empty(value: str | None) -> str | None:

@@ -48,6 +48,11 @@ class EvalCase:
     question: str
     expected_metric_id: str | None = None
     expected_sql_fragments: tuple[str, ...] = ()
+    # FR-FV03-024: retrieval ground truth (Spec FV03.4). An empty tuple
+    # means this case does not participate in retrieval scoring, mirroring
+    # how an empty expected_sql_fragments already opts a case out of SQL
+    # accuracy scoring.
+    expected_chunk_ids: tuple[str, ...] = ()
     permission_context: Mapping[str, object] = field(default_factory=_empty_permission_context)
 
     def __post_init__(self) -> None:
@@ -66,12 +71,24 @@ class EvalScore:
     sql_safe: bool
     rag_faithful: bool | None
     answer_quality_score: float
+    # Code-review fix (Spec FV03.4 gap): retrieval ground truth (Spec
+    # FV03.4) previously had nowhere to persist per-case — None means this
+    # case has no expected_chunk_ids and does not participate in retrieval
+    # scoring, mirroring rag_faithful's "not applicable" convention.
+    # Observability-only (FR-FV03-028): deliberately excluded from
+    # `passed` below, the same way rag_faithful=None already is.
+    retrieval_hit_at_3: bool | None = None
+    retrieval_reciprocal_rank: float | None = None
 
     def __post_init__(self) -> None:
         if not self.case_id.strip():
             raise ValueError("case_id is required")
         if not 0.0 <= self.answer_quality_score <= 1.0:
             raise ValueError("answer_quality_score must be between 0.0 and 1.0")
+        if self.retrieval_reciprocal_rank is not None and not (
+            0.0 <= self.retrieval_reciprocal_rank <= 1.0
+        ):
+            raise ValueError("retrieval_reciprocal_rank must be between 0.0 and 1.0")
 
     @property
     def passed(self) -> bool:

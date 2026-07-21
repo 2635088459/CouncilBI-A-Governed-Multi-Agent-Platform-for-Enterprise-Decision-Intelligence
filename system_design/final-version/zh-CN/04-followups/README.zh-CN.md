@@ -1,0 +1,17 @@
+# 4 后续设计:让混合检索知识库的检索质量真正落地
+
+English version: [../../en/04-followups/README.en.md](../../en/04-followups/README.en.md)
+
+这五份文档是 [第4章:Embedding、向量检索与 RAG](../04-embedding-vector-rag.zh-CN.md) 的后续延伸。它们源自一次对"这个平台的检索管线实际做了什么"与"一个典型的混合检索 RAG 系统通常被描述成做了什么"(BM25+向量融合、cross-encoder 重排序、真实 embedding、基于 Golden Dataset 的 Hit Rate/MRR 自动化评估、以及生产级向量数据库)之间的诚实、代码级审查。审查发现架构的"骨架"其实已经对上了——混合打分公式和一个文档化的四阶段流程都已经存在——但其中三个阶段是占位实现:"向量"检索在一条实际生效的代码路径上跑在确定性哈希分桶伪 embedding 上而不是真实模型上(而在另一条并存的路径上倒是接了真实 embedding,却完全没有关键词打分,因为两套互不相通的检索机制同时存在);"关键词"打分是一个普通的 token 重叠比例,不是 BM25;"重排序"只是对上一步已经算好的分数重新排了个序,没有跑第二次模型打分。评估这块则只测答案层面的质量和延迟——完全没有"检索有没有找对 chunk"这件事的 ground truth。存储这块,最后,完全是进程本地的——每个 embedding 只活在内存里,没有 ANN 索引,重启就没了,也不具备持久化。
+
+建议按以下顺序阅读——每一篇都是准确衡量下一篇效果的前提:
+
+1. [4.1 统一"纯向量"与"混合检索"两条路径,并接入真实 Embedding](01-unifying-the-vector-and-hybrid-retrieval-paths.zh-CN.md) —— 修复 `RagAgentRunner` 会根据哪条路径被接线,静默地在"真实 embedding 但无关键词"和"混合打分但假 embedding"之间二选一的问题;让混合路径成为线上聊天查询唯一可达的路径,并在它背后接上真实 embedding client。
+2. [4.2 用真正的 BM25 替换 Jaccard 式关键词重叠打分](02-bm25-keyword-scoring.zh-CN.md) —— 把目前在混合打分里承担"关键词"那一半的查询-token覆盖率,换成真正的 BM25,在每次请求已经过权限过滤的候选集合上计算,同时顺手修复一个静默的中文分词缺口。
+3. [4.3 加入真正的 Cross-Encoder 重排序阶段](03-cross-encoder-reranking.zh-CN.md) —— 补上检索管线自己 docstring 里早就声称拥有、实际却没有的重排序阶段:对收窄后的 top-2K 候选做第二遍 cross-encoder 打分,模型不可用时回退到重排序前的排序。
+4. [4.4 检索侧的标注数据集与 Hit Rate/MRR 自动化评估](04-golden-dataset-hit-rate-and-mrr-evaluation.zh-CN.md) —— 给现有评估体系加上检索专属的 ground truth(`expected_chunk_ids`)和指标(Hit Rate@K、MRR),初期作为纯可观测性指标,发布门禁阈值推迟到有真实基线之后再定;也是整个方案里成本主要在人工标注、而不是代码上的一个阶段。
+5. [4.5 用 pgvector 实现生产级向量检索](05-pgvector-production-vector-search.zh-CN.md) —— 把 `InMemoryKnowledgeStore` 的内存向量存储换成 `knowledge.doc_embeddings` 上(平台现有 Postgres 实例)的 pgvector:一次 schema 迁移、一个实现新协议 `VectorCandidateSource` 的 `PostgresKnowledgeVectorSource`、SQL 层面的 owner/role 作用域限定(堵住 [10.1](../10-followups/01-rag-per-user-isolation.zh-CN.md) 已经发现过的同一类泄漏)、一次回填迁移,以及一个作为明确验收标准的 owner 隔离测试。
+
+## 状态
+
+前四份(4.1–4.4)已经实现(见本项目源码树和测试套件)。[4.5](05-pgvector-production-vector-search.zh-CN.md) 还是一份**待实现的设计方案**——把它建起来是当前的下一步。这五篇文档是在一次请求——评估"要把这个项目实际的检索实现,补到能对上一个不相关示例(一页描述 BM25+向量融合、重排序模型、基于 Golden Dataset 的 Hit Rate/MRR 评估流水线、以及 ElasticSearch/Redis 等具名基础设施的 PPT)所描述的水平,需要多大工作量"——之后写就的。产出这五篇文档的审查过程中,也发现并纠正了一个最初的判断:这个代码库里的 embedding **不是**简单地"全都是 mock"——一个真实的 `OpenAIEmbeddingClient`([embedding_vector_config.py:19-63](../../../../src/chatbi/embedding_vector_config.py))其实已经存在,并且已经接入了 [4.1](01-unifying-the-vector-and-hybrid-retrieval-paths.zh-CN.md) 所描述的两条检索路径中的一条;真正的问题在于它被接到了没有关键词打分的那条路径上,而不是这个代码库里完全没有真实 embedding。[4.5](05-pgvector-production-vector-search.zh-CN.md) 最初的定位是一份可选、推迟的文档,后来改写成了和 4.1–4.4 同等承诺力度的完整设计——但它第一版完整设计瞄准的 schema 是错的(`rag.embedding_metadata`,属于 4.1 退役掉的那条纯向量管线),协议也是错的(`VectorStore`,它的 `org_id`/`permission_tags` 模型和 `InMemoryKnowledgeStore` 真正的 `owner_user_id`/`allowed_roles` 模型对不上)。4.5 的 §1/§2/§3 记录并修正了这个错误——是在 4.1–4.4 真正实现完、目标已经毫无歧义之后才发现的。

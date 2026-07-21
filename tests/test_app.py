@@ -1,7 +1,11 @@
+from datetime import datetime, timezone
+
 from chatbi.api.models import ApiErrorCode, ChatQueryRequestPayload, EvalRunRequestPayload
 from chatbi.application.app import ChatBIApplication
 from chatbi.core.contracts import ErrorCode, Locale, UserRole
+from chatbi.knowledge import DocumentChunk, InMemoryKnowledgeStore, KnowledgeDocument
 from chatbi.observability import TraceSpanName, TraceSpanStatus
+from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.rate_limit import InMemorySlidingWindowRateLimitStore
 from chatbi.trace_events import TraceEventStatus
 
@@ -402,6 +406,79 @@ def test_handle_eval_run_persists_run_and_scores_by_eval_run_id() -> None:
     assert saved_run.sql_safety_score == 1.0
     assert saved_run.release_gate_passed is True
     assert tuple(score.case_id for score in saved_scores) == ("case_001", "case_002")
+
+
+def test_handle_eval_run_computes_retrieval_metrics_against_the_live_knowledge_store() -> None:
+    # Code-review fix (Spec FV03.4 gap): score_suite() supported
+    # retrieval_metrics from the day it was written, but handle_eval_run()
+    # never computed or passed them — this is Golden-Dataset-style
+    # retrieval scoring against the real, seeded production chunk id
+    # (migrations.py's KNOWLEDGE_RAG_SEED_SQL), not a mock.
+    knowledge_store = InMemoryKnowledgeStore()
+    knowledge_store.save_document(
+        KnowledgeDocument(
+            source_id="rag_revenue_policy_2026",
+            title="Revenue metric policy and anomaly explanation",
+            doc_type="policy",
+            publish_time=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        )
+    )
+    knowledge_store.save_chunk(
+        DocumentChunk(
+            chunk_id="rag_revenue_policy_2026_chunk_1",
+            source_id="rag_revenue_policy_2026",
+            chunk_index=1,
+            chunk_text=(
+                "Revenue is calculated from paid orders only. A month-over-month "
+                "spike should be explained with campaign, refund, and region context."
+            ),
+        )
+    )
+    app = ChatBIApplication(orchestrator=SimpleOrchestrator(knowledge_store=knowledge_store))
+
+    envelope = app.handle_eval_run(
+        user_id="u_001",
+        trace_id="trc_eval_retrieval",
+        payload=EvalRunRequestPayload(
+            eval_suite_id="retrieval_smoke",
+            questions=("Why did revenue change?",),
+            locale=Locale.EN,
+            role=UserRole.ANALYST,
+        ),
+    )
+
+    assert envelope.data is not None
+    metric_breakdown = envelope.data["metric_breakdown"]
+    assert metric_breakdown["retrieval_hit_rate"] == 1.0
+    assert metric_breakdown["retrieval_mrr"] == 1.0
+
+    eval_run_id = envelope.data["eval_run_id"]
+    saved_scores = app.evaluation_repository.scores_by_run_id(eval_run_id)
+    assert saved_scores[0].retrieval_hit_at_3 is True
+    assert saved_scores[0].retrieval_reciprocal_rank == 1.0
+
+
+def test_handle_eval_run_omits_retrieval_metrics_when_no_case_has_expected_chunk_ids() -> None:
+    # FR-FV03-028: observability-only — a suite with no Golden Dataset
+    # cases (the default SQL-only smoke questions) must not report a
+    # meaningless default retrieval score.
+    app = ChatBIApplication()
+
+    envelope = app.handle_eval_run(
+        user_id="u_001",
+        trace_id="trc_eval_no_retrieval",
+        payload=EvalRunRequestPayload(
+            eval_suite_id="backend_api_smoke",
+            questions=("Show revenue trend.", "DROP TABLE orders"),
+            locale=Locale.EN,
+            role=UserRole.ANALYST,
+        ),
+    )
+
+    assert envelope.data is not None
+    metric_breakdown = envelope.data["metric_breakdown"]
+    assert "retrieval_hit_rate" not in metric_breakdown
+    assert "retrieval_mrr" not in metric_breakdown
 
 
 def test_handle_eval_report_returns_saved_eval_run_report() -> None:

@@ -131,6 +131,26 @@ def test_load_runtime_config_ignores_invalid_file_conversation_context_turns() -
     assert config.file_conversation_context_turns == 2
 
 
+def test_load_runtime_config_defaults_reranker_and_pgvector_search_to_disabled() -> None:
+    # Code-review fix (Spec FV03.3/FV03.5 gap): both opt-in, off by default.
+    config = load_runtime_config({})
+
+    assert config.reranker_enabled is False
+    assert config.pgvector_search_enabled is False
+
+
+def test_load_runtime_config_reads_reranker_enabled_flag() -> None:
+    assert load_runtime_config({"CHATBI_RERANKER_ENABLED": "true"}).reranker_enabled is True
+    assert load_runtime_config({"CHATBI_RERANKER_ENABLED": "1"}).reranker_enabled is True
+    assert load_runtime_config({"CHATBI_RERANKER_ENABLED": "false"}).reranker_enabled is False
+    assert load_runtime_config({"CHATBI_RERANKER_ENABLED": ""}).reranker_enabled is False
+
+
+def test_load_runtime_config_reads_pgvector_search_enabled_flag() -> None:
+    assert load_runtime_config({"CHATBI_PGVECTOR_SEARCH_ENABLED": "true"}).pgvector_search_enabled is True
+    assert load_runtime_config({"CHATBI_PGVECTOR_SEARCH_ENABLED": "0"}).pgvector_search_enabled is False
+
+
 def test_runtime_config_treats_blank_values_as_missing() -> None:
     config = load_runtime_config(
         {

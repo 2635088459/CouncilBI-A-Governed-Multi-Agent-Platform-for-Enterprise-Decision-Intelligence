@@ -409,6 +409,22 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_doc_embeddings_chunk_id
     ON knowledge.doc_embeddings(chunk_id);
 """
 
+# FR-FV03-029 (Spec FV03.5): pgvector storage for InMemoryKnowledgeStore's
+# hybrid retrieval path. A separate block from KNOWLEDGE_RAG_TABLES_SQL
+# above, since the `vector` extension/column is optional production
+# infrastructure (Spec FV03.5's own §9 "known limitation" on corpus scale),
+# not required for the base knowledge.* schema every deployment needs.
+KNOWLEDGE_VECTOR_SEARCH_SQL = """
+CREATE EXTENSION IF NOT EXISTS vector;
+
+ALTER TABLE knowledge.doc_embeddings
+    ADD COLUMN IF NOT EXISTS embedding vector(1536);
+
+CREATE INDEX IF NOT EXISTS knowledge_doc_embeddings_hnsw_idx
+    ON knowledge.doc_embeddings
+    USING hnsw (embedding vector_cosine_ops);
+"""
+
 KNOWLEDGE_RAG_SEED_SQL = """
 INSERT INTO knowledge.documents (
     source_id,
@@ -903,6 +919,14 @@ JOIN evaluation.eval_scores AS eval_score
 WHERE history.trace_id = %s;
 """
 
+# FR-FV03-029 (Spec FV03.5): kept out of BASE_MIGRATION_SQL_STATEMENTS
+# deliberately — CREATE EXTENSION vector fails outright on a Postgres
+# instance without pgvector compiled in, and apply_base_migration() records
+# the *entire* base migration as failed on any statement's exception. An
+# optional production upgrade must not be able to take down every other
+# table's migration for environments that never opted into it.
+KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION = "002_knowledge_vector_search"
+
 BASE_MIGRATION_VERSION = "001_base_runtime_foundation"
 BASE_MIGRATION_SQL_STATEMENTS = (
     V2_SCHEMAS_SQL,
@@ -1039,6 +1063,27 @@ class MigrationRunner:
         except Exception as exc:
             result = MigrationResult(
                 version=BASE_MIGRATION_VERSION,
+                status=MigrationStatus.FAILED,
+                error=str(exc) or exc.__class__.__name__,
+            )
+        self._metadata_store.save_result(result)
+        return result
+
+    def apply_knowledge_vector_search_migration(self) -> MigrationResult:
+        """FR-FV03-029 (Spec FV03.5): opt-in pgvector upgrade for
+        knowledge.doc_embeddings. Deliberately separate from
+        apply_base_migration() — see KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION's
+        own comment for why."""
+
+        try:
+            self._connection.execute(KNOWLEDGE_VECTOR_SEARCH_SQL)
+            result = MigrationResult(
+                version=KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION,
+                status=MigrationStatus.SUCCEEDED,
+            )
+        except Exception as exc:
+            result = MigrationResult(
+                version=KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION,
                 status=MigrationStatus.FAILED,
                 error=str(exc) or exc.__class__.__name__,
             )

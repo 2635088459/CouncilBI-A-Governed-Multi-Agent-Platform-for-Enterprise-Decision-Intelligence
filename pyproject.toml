@@ -13,6 +13,7 @@ dependencies = [
     "python-docx>=1.1.0",
     "python-multipart>=0.0.9",
     "python-pptx>=1.0.0",
+    "rank-bm25>=0.2.2",
     "uvicorn[standard]>=0.30.0",
 ]
 
@@ -25,6 +26,14 @@ dev = [
     "httpx>=0.27.0",
     "pytest>=8.0.0",
     "pyright>=1.1.350",
+]
+rerank = [
+    # Spec FV03.3: cross-encoder reranking (BgeCrossEncoderReranker). Kept
+    # optional, not a core dependency, since it pulls in torch — retrieve()
+    # falls back to the pre-rerank hybrid ordering when no reranker is
+    # configured (FR-FV03-023), so this extra is only needed to actually
+    # exercise the real model, not to run the platform.
+    "sentence-transformers>=3.0.0",
 ]
 
 [tool.pytest.ini_options]

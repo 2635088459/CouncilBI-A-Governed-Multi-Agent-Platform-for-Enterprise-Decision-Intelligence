@@ -1,8 +1,35 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from chatbi.agents.file_scoped_retriever import FileScopedRetriever
+from chatbi.embedding_vector_rag import EmbeddingRequest, EmbeddingResponse
 from chatbi.files import InMemoryFileRepository, InMemoryFileVectorSink, UserUploadedFile
 from chatbi.files.parser_unstructured import TextChunk
+from chatbi.knowledge import text_embedding
+
+
+@dataclass
+class FakeEmbeddingClient:
+    """A real EmbeddingClient implementation returning a fixed, recognizable
+    vector distinct from text_embedding()'s hash-bucket output, so the test
+    can tell which one FileScopedRetriever actually used for the query."""
+
+    vector: tuple[float, ...]
+
+    @property
+    def provider_name(self) -> str:
+        return "fake"
+
+    def embed(self, request: EmbeddingRequest) -> EmbeddingResponse:
+        return EmbeddingResponse(
+            vectors=(self.vector,),
+            provider="fake",
+            model_name=request.model_name,
+            dimensions=len(self.vector),
+            token_count=0,
+            estimated_cost=0.0,
+            latency_ms=0,
+        )
 
 
 def _now() -> datetime:
@@ -107,3 +134,36 @@ def test_retrieve_returns_empty_tuple_when_no_chunks_exist_for_any_requested_fil
     evidence = retriever.retrieve(question="anything", file_ids=("ufile_doc1",))
 
     assert evidence == ()
+
+
+def test_retrieve_embeds_the_query_with_the_real_configured_embedding_client() -> None:
+    # Code-review fix: FileScopedRetriever._rank() previously always called
+    # chatbi.knowledge.text_embedding(question) directly for the query
+    # vector, ignoring any real EmbeddingClient the file's chunks were
+    # actually embedded with (FileProcessingWorker) — comparing a
+    # deterministic hash-bucket query vector against real provider vectors
+    # produces a meaningless cosine similarity.
+    question = "What is the Team tier price?"
+    fake_vector = tuple(1.0 if index == 0 else 0.0 for index in range(16))
+    hash_bucket_vector = text_embedding(question)
+    assert hash_bucket_vector[0] == 0.0  # guarantees the two vectors are orthogonal
+
+    repository = InMemoryFileRepository()
+    repository.save(_unstructured_file("ufile_doc1"))
+    vector_source = InMemoryFileVectorSink()
+    vector_source.upsert_chunks(
+        (
+            TextChunk(text="matches the real embedding client", chunk_index=1, file_id="ufile_doc1"),
+            TextChunk(text="matches the hash-bucket fallback", chunk_index=2, file_id="ufile_doc1"),
+        ),
+        (fake_vector, hash_bucket_vector),
+    )
+    retriever = FileScopedRetriever(
+        vector_source=vector_source,
+        repository=repository,
+        embedding_client=FakeEmbeddingClient(vector=fake_vector),
+    )
+
+    evidence = retriever.retrieve(question=question, file_ids=("ufile_doc1",))
+
+    assert evidence[0].citation_anchor == "ufile_doc1#chunk-1"

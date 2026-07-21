@@ -16,6 +16,7 @@ from chatbi.core.contracts import (
     TableResult,
     UserRole,
 )
+from chatbi.agents.rag_agent import InMemoryVectorRagRetriever, RagAgentRunner
 from chatbi.governance import ReadOnlyQueryResult, ReadOnlyQueryStatus
 from chatbi.knowledge import DocumentChunk, InMemoryKnowledgeStore, KnowledgeDocument
 from chatbi.llm import LLMRequest, LLMResponse
@@ -754,6 +755,62 @@ def test_orchestrator_uses_knowledge_store_for_rag_evidence() -> None:
     assert answer.retrieval_stats is not None
     assert answer.retrieval_stats.selected_count == 1
     assert answer.retrieval_stats.filtered_count == 1
+
+
+def test_build_runners_rag_agent_always_has_no_vector_retriever() -> None:
+    # TC-FV03-021 / AC-FV03-011 / FR-FV03-016: the orchestrator must always
+    # construct RagAgentRunner with vector_retriever=None, so the hybrid
+    # (knowledge_store) path is the only retrieval mechanism reachable from
+    # a live chat query — never the vector-only _retrieve_vector_if_possible
+    # branch, regardless of which is wired in elsewhere in the codebase.
+    orchestrator = SimpleOrchestrator(knowledge_store=InMemoryKnowledgeStore())
+
+    runners = orchestrator._build_runners(  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        request=make_request("Why did revenue drop?"),
+        trace_id="trace-1",
+        sql_candidate="",
+    )
+
+    rag_runner = runners[AgentName.RAG]
+    assert isinstance(rag_runner, RagAgentRunner)
+    assert rag_runner.vector_retriever is None
+
+
+def test_orchestrator_never_calls_vector_only_retriever_for_a_rag_question(monkeypatch: Any) -> None:
+    # TC-FV03-022: with vector_retriever always None (previous test), the
+    # vector-only path can never be reached — confirmed end-to-end by
+    # making InMemoryVectorRagRetriever.retrieve raise if it is ever called,
+    # then running a normal RAG-classified question through the real
+    # orchestrator and asserting it still answers correctly via the
+    # knowledge_store hybrid path.
+    def _fail_if_called(_self: InMemoryVectorRagRetriever, **_kwargs: Any) -> Any:
+        raise AssertionError("vector-only retrieval path must never run from a live chat query")
+
+    monkeypatch.setattr(InMemoryVectorRagRetriever, "retrieve", _fail_if_called)
+
+    knowledge_store = InMemoryKnowledgeStore()
+    knowledge_store.save_document(
+        KnowledgeDocument(
+            source_id="doc_campaign",
+            title="Campaign report",
+            doc_type="report",
+            publish_time=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+    )
+    knowledge_store.save_chunk(
+        DocumentChunk(
+            chunk_id="chunk_campaign_1",
+            source_id="doc_campaign",
+            chunk_index=1,
+            chunk_text="Revenue dropped after campaign spend paused.",
+        )
+    )
+    orchestrator = SimpleOrchestrator(knowledge_store=knowledge_store)
+
+    answer = orchestrator.answer(make_request("Why did revenue drop?"))
+
+    assert len(answer.evidence_list) == 1
+    assert answer.evidence_list[0].source_id == "doc_campaign"
 
 
 def test_orchestrator_answers_a_document_only_question_without_sql() -> None:

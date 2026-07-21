@@ -43,7 +43,37 @@ def test_load_eval_cases_defaults_optional_fields() -> None:
 
     assert cases[0].expected_metric_id is None
     assert cases[0].expected_sql_fragments == ()
+    assert cases[0].expected_chunk_ids == ()
     assert cases[0].permission_context == {}
+
+
+def test_load_eval_cases_populates_expected_chunk_ids() -> None:
+    # TC-FV03-039 / AC-FV03-021.
+    cases = load_eval_cases(
+        (
+            {
+                "case_id": "case_retrieval",
+                "question": "Why did revenue drop?",
+                "expected_chunk_ids": [" doc_campaign_chunk_1 ", "doc_campaign_chunk_2"],
+            },
+        )
+    )
+
+    assert cases[0].expected_chunk_ids == ("doc_campaign_chunk_1", "doc_campaign_chunk_2")
+
+
+def test_load_eval_cases_defaults_expected_chunk_ids_to_empty_tuple() -> None:
+    # TC-FV03-040 / AC-FV03-021.
+    cases = load_eval_cases(
+        (
+            {
+                "case_id": "case_no_retrieval",
+                "question": "Show revenue trend.",
+            },
+        )
+    )
+
+    assert cases[0].expected_chunk_ids == ()
 
 
 def test_load_eval_cases_rejects_duplicate_case_ids() -> None:

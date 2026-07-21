@@ -1,5 +1,7 @@
 from time import perf_counter
 
+import pytest
+
 from chatbi.embedding_vector_rag import (
     DocumentRecord,
     DocumentStatus,
@@ -20,7 +22,11 @@ from chatbi.embedding_vector_rag import (
     ingest_document,
 )
 from chatbi.core.runtime_config import RuntimeConfig
-from chatbi.embedding_vector_config import build_embedding_vector_rag_service_from_runtime_config
+from chatbi.embedding_vector_config import (
+    OpenAIEmbeddingClient,
+    build_embedding_vector_rag_service_from_runtime_config,
+    build_knowledge_store_embedding_client,
+)
 from chatbi.resilience import RetryPolicy
 from chatbi.trace_events import TraceEventRecorder, TraceEventStatus
 
@@ -462,3 +468,27 @@ def test_runtime_config_builds_memory_embedding_vector_rag_service() -> None:
 
 def test_runtime_config_returns_no_vector_rag_service_when_vector_store_is_missing() -> None:
     assert build_embedding_vector_rag_service_from_runtime_config(RuntimeConfig()) is None
+
+
+def test_build_knowledge_store_embedding_client_returns_openai_client_for_openai_provider() -> None:
+    # TC-FV03-018 / AC-FV03-012: same provider switch, same model value, as
+    # the vector-only pipeline's OpenAIEmbeddingClient construction.
+    client = build_knowledge_store_embedding_client(
+        RuntimeConfig(embedding_provider="openai", embedding_model="text-embedding-3-large")
+    )
+
+    assert isinstance(client, OpenAIEmbeddingClient)
+    assert client._model == "text-embedding-3-large"  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+
+
+def test_build_knowledge_store_embedding_client_returns_none_for_mock_provider() -> None:
+    # TC-FV03-019: "mock" means "let embed_text() fall back to
+    # text_embedding()", not "construct a client that produces mock vectors".
+    assert build_knowledge_store_embedding_client(RuntimeConfig(embedding_provider="mock")) is None
+
+
+def test_build_knowledge_store_embedding_client_rejects_unsupported_provider() -> None:
+    # TC-FV03-020: matches build_embedding_vector_rag_service_from_runtime_config's
+    # existing "fail configuration explicitly" convention for an unknown provider.
+    with pytest.raises(ValueError, match="Unsupported embedding provider"):
+        build_knowledge_store_embedding_client(RuntimeConfig(embedding_provider="unsupported"))

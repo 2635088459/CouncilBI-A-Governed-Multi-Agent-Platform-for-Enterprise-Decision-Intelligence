@@ -139,3 +139,65 @@ def test_release_gate_blocks_chat_query_p95_latency_over_slo() -> None:
 
     assert report.metric_breakdown["latency_p95"] == 9000.0
     assert report.release_gate_passed is False
+
+
+def test_score_suite_includes_retrieval_metrics_when_provided() -> None:
+    # TC-FV03-046 / AC-FV03-024 (Spec FV03.4): retrieval_metrics, once
+    # supplied, appears alongside the six existing metrics.
+    scorer = EvaluationScorer()
+
+    report = scorer.score_suite(
+        eval_suite_id="retrieval_gate",
+        observations=(
+            EvaluationObservation(
+                question="Show revenue trend.",
+                trace_id="trc_eval_retrieval",
+                sql_text="SELECT month, revenue FROM revenue_by_month LIMIT 100",
+                confidence=0.9,
+                latency_ms=100,
+            ),
+        ),
+        expectations={},
+        retrieval_metrics={"retrieval_hit_rate": 0.75, "retrieval_mrr": 0.6},
+    )
+
+    assert report.metric_breakdown["retrieval_hit_rate"] == 0.75
+    assert report.metric_breakdown["retrieval_mrr"] == 0.6
+
+
+def test_score_suite_omits_retrieval_metrics_when_not_provided() -> None:
+    scorer = EvaluationScorer()
+
+    report = scorer.score_suite(
+        eval_suite_id="no_retrieval_gate",
+        observations=(),
+        expectations={},
+    )
+
+    assert "retrieval_hit_rate" not in report.metric_breakdown
+    assert "retrieval_mrr" not in report.metric_breakdown
+
+
+def test_release_gate_unaffected_by_a_zero_retrieval_hit_rate() -> None:
+    # TC-FV03-047 / AC-FV03-025: confirms FR-FV03-028's observability-only
+    # status — a suite with every other gating condition passing must
+    # still pass the release gate even with retrieval_hit_rate == 0.0.
+    scorer = EvaluationScorer()
+
+    report = scorer.score_suite(
+        eval_suite_id="retrieval_gate_zero",
+        observations=(
+            EvaluationObservation(
+                question="Show revenue trend.",
+                trace_id="trc_eval_retrieval_zero",
+                sql_text="SELECT month, revenue FROM revenue_by_month LIMIT 100",
+                confidence=0.9,
+                latency_ms=100,
+            ),
+        ),
+        expectations={},
+        retrieval_metrics={"retrieval_hit_rate": 0.0, "retrieval_mrr": 0.0},
+    )
+
+    assert report.metric_breakdown["retrieval_hit_rate"] == 0.0
+    assert report.release_gate_passed is True

@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from chatbi.core.contracts import EvidenceItem
+from chatbi.embedding_vector_rag import EmbeddingClient, EmbeddingRequest
 from chatbi.files.parser_unstructured import TextChunk
 from chatbi.files.repository import FileRepository
 from chatbi.files.worker import FileVectorSource
@@ -27,6 +28,14 @@ from chatbi.knowledge import cosine_similarity, keyword_overlap_score, text_embe
 class FileScopedRetriever:
     vector_source: FileVectorSource
     repository: FileRepository
+    # Code-review fix: the chunk vectors chunks_with_vectors_for_file()
+    # returns come from FileProcessingWorker's real, configured
+    # EmbeddingClient (see files/worker.py's own module docstring) — the
+    # query side must be embedded with the *same* client, or comparing a
+    # deterministic hash-bucket query vector against real document vectors
+    # produces a meaningless cosine similarity. None keeps the
+    # deterministic text_embedding() fallback for offline tests.
+    embedding_client: EmbeddingClient | None = None
 
     def retrieve(
         self, *, question: str, file_ids: tuple[str, ...], top_k: int = 5
@@ -56,7 +65,17 @@ class FileScopedRetriever:
         # uses (_rank_records) — no source_weight term here, since a raw
         # uploaded-file chunk has no doc_type to weight by.
         query_tokens = text_tokens(question)
-        query_embedding = text_embedding(question)
+        query_embedding = (
+            self.embedding_client.embed(
+                EmbeddingRequest(
+                    trace_id="trc_file_scoped_retrieve",
+                    org_id="org_legacy",
+                    input_texts=(question,),
+                )
+            ).vectors[0]
+            if self.embedding_client is not None
+            else text_embedding(question)
+        )
 
         scored: list[tuple[str, TextChunk, float]] = []
         for file_id, chunk, vector in candidates:

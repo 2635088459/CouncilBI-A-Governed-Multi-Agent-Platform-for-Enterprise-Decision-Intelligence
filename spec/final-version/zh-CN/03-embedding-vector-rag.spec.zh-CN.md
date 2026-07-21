@@ -153,3 +153,7 @@ Vector search event 必须包含：
 | NFR-FV03-001 | AC-FV03-001 | TC-FV03-008 |
 | NFR-FV03-003 | AC-FV03-001 | TC-FV03-001 |
 | NFR-FV03-004 | AC-FV03-002 | TC-FV03-005 |
+
+## 9. 后续设计
+
+对照本 spec,审查实际实现的检索管线代码后发现:在设计层面看起来完整的混合检索 RAG 系统背后,藏着一些真实的缺口——一条检索路径上是假的哈希分桶 embedding、BM25 的位置被 Jaccard token 重叠顶替、"重排序"阶段从不重新打分,而且整个评估体系里没有任何检索专属的评估指标。补齐这些缺口的 spec 见 [04-followups/](04-followups/README.zh-CN.md),延续本 spec 自己的 FR-/NFR-/AC-/TC- 编号。

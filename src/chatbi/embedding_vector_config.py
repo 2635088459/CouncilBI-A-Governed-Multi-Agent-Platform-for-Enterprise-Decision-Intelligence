@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-from math import ceil
 from time import perf_counter
 
 from chatbi.core.runtime_config import RuntimeConfig
 from chatbi.embedding_vector_rag import (
+    EmbeddingClient,
     EmbeddingRequest,
     EmbeddingResponse,
     EmbeddingVectorRagService,
@@ -85,3 +85,26 @@ def build_embedding_vector_rag_service_from_runtime_config(
         vector_store=InMemoryVectorStore(),
         embedding_model_name=runtime_config.embedding_model,
     )
+
+
+def build_knowledge_store_embedding_client(
+    runtime_config: RuntimeConfig,
+) -> EmbeddingClient | None:
+    """FR-FV03-015: the knowledge-store (hybrid retrieval) ingestion path's
+    embedding provider, selected by the same ``runtime_config.embedding_provider``
+    switch ``build_embedding_vector_rag_service_from_runtime_config`` above
+    already reads — one configuration setting now governs both call sites.
+
+    Returns ``None`` for the ``mock`` provider so callers (``InMemoryKnowledgeStore
+    .embed_text``/``ingest_document``) fall back to the deterministic
+    hash-bucket ``text_embedding()``, exactly as they do today when no
+    embedding client is supplied at all.
+    """
+
+    if runtime_config.embedding_provider == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        model = runtime_config.embedding_model or "text-embedding-3-small"
+        return OpenAIEmbeddingClient(api_key=api_key, model=model)
+    if runtime_config.embedding_provider == "mock":
+        return None
+    raise ValueError(f"Unsupported embedding provider: {runtime_config.embedding_provider}")

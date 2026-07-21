@@ -130,3 +130,7 @@ RAG 可以减少 token 的方法：
 5. 给 RAG Agent 加租户过滤。
 6. 给回答加 citation。
 7. 写测试：A 租户不能搜到 B 租户文档。
+
+## 10. 后续设计
+
+对照本设计文档,审查了实际实现的检索管线代码后发现:混合打分的架构骨架已经搭好,但其中三个阶段其实跑在占位实现上(一条检索路径上是假的哈希分桶 embedding,BM25 的位置被 Jaccard token 重叠顶替,"重排序"阶段从不重新打分),而且整个评估体系里没有任何检索专属的评估指标,向量存储也完全是进程本地的。补齐这些缺口的设计方案见 [04-followups/](04-followups/README.zh-CN.md):统一两条互不相通的检索路径并接入真实 embedding、真正的 BM25 关键词打分、真正的 cross-encoder 重排序阶段、带 Hit Rate/MRR 评估的 Golden Dataset,以及基于 pgvector 的生产级向量检索。

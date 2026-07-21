@@ -36,6 +36,8 @@ from chatbi.migrations import (
     KNOWLEDGE_DOCUMENTS_TABLE,
     KNOWLEDGE_RAG_SEED_SQL,
     KNOWLEDGE_RAG_TABLES_SQL,
+    KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION,
+    KNOWLEDGE_VECTOR_SEARCH_SQL,
     MIGRATION_METADATA_TABLE,
     MIGRATION_METADATA_TABLE_SQL,
     RAG_V2_CHUNKS_TABLE,
@@ -698,3 +700,50 @@ def test_migration_runner_records_failure_when_statement_fails() -> None:
     assert audit_params[0] == BASE_MIGRATION_VERSION
     assert audit_params[2] == "failed"
     assert audit_params[3] == "migration statement failed"
+
+
+def test_knowledge_vector_search_sql_creates_pgvector_extension_column_and_index() -> None:
+    # TC-FV03-049 / AC-FV03-027 (Spec FV03.5).
+    normalized_sql = " ".join(KNOWLEDGE_VECTOR_SEARCH_SQL.split())
+
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in normalized_sql
+    assert "ALTER TABLE knowledge.doc_embeddings" in normalized_sql
+    assert "ADD COLUMN IF NOT EXISTS embedding vector(1536)" in normalized_sql
+    assert "CREATE INDEX IF NOT EXISTS knowledge_doc_embeddings_hnsw_idx" in normalized_sql
+    assert "USING hnsw (embedding vector_cosine_ops)" in normalized_sql
+
+
+def test_knowledge_vector_search_sql_is_not_part_of_the_base_migration() -> None:
+    # Spec FV03.5's own design records why: CREATE EXTENSION vector fails
+    # outright on a Postgres instance without pgvector compiled in, and
+    # apply_base_migration() would record the *entire* base migration as
+    # failed on any one statement's exception.
+    assert KNOWLEDGE_VECTOR_SEARCH_SQL not in BASE_MIGRATION_SQL_STATEMENTS
+
+
+def test_migration_runner_applies_knowledge_vector_search_migration_and_records_success() -> None:
+    connection = FakeMigrationConnection()
+    runner = MigrationRunner(connection)
+
+    result = runner.apply_knowledge_vector_search_migration()
+
+    executed_sql, _params = connection.commands[0]
+    audit_sql, audit_params = connection.commands[-1]
+    assert result.version == KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION
+    assert result.status is MigrationStatus.SUCCEEDED
+    assert executed_sql == KNOWLEDGE_VECTOR_SEARCH_SQL
+    assert "INSERT INTO schema_migrations" in audit_sql
+    assert audit_params[0] == KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION
+    assert audit_params[2] == "succeeded"
+    assert audit_params[3] is None
+
+
+def test_migration_runner_records_failure_when_pgvector_extension_is_unavailable() -> None:
+    connection = FakeMigrationConnection(fail_on_sql="CREATE EXTENSION IF NOT EXISTS vector")
+    runner = MigrationRunner(connection)
+
+    result = runner.apply_knowledge_vector_search_migration()
+
+    assert result.version == KNOWLEDGE_VECTOR_SEARCH_MIGRATION_VERSION
+    assert result.status is MigrationStatus.FAILED
+    assert result.error == "migration statement failed"

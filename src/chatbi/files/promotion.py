@@ -31,7 +31,7 @@ from chatbi.embedding_vector_rag import DocumentRecord, VectorChunk, VectorStore
 from chatbi.files.contracts import UserUploadedFile
 from chatbi.files.repository import FileRepository
 from chatbi.files.worker import FileVectorSource
-from chatbi.knowledge import ChunkEmbedding, DocumentChunk, InMemoryKnowledgeStore, KnowledgeDocument, text_embedding
+from chatbi.knowledge import ChunkEmbedding, DocumentChunk, InMemoryKnowledgeStore, KnowledgeDocument
 
 
 class NotAuthorizedToPromoteError(Exception):
@@ -195,7 +195,10 @@ class KnowledgePromotionService:
                     ChunkEmbedding(
                         embedding_id=f"{chunk_id}_emb",
                         chunk_id=chunk_id,
-                        embedding_vector=text_embedding(text),
+                        # FR-FV03-014/015: uses whatever EmbeddingClient this
+                        # store was constructed with (real or none), instead
+                        # of always calling the deterministic fallback directly.
+                        embedding_vector=self._live_knowledge_store.embed_text(text),
                     )
                 )
 

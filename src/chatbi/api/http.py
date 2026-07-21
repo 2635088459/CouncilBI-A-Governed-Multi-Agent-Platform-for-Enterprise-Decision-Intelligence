@@ -82,7 +82,11 @@ from chatbi.core.runtime_config import (
     RuntimeConfig,
     load_runtime_config,
 )
-from chatbi.embedding_vector_config import build_embedding_vector_rag_service_from_runtime_config
+from chatbi.embedding_vector_config import (
+    build_embedding_vector_rag_service_from_runtime_config,
+    build_knowledge_store_embedding_client,
+)
+from chatbi.embedding_vector_rag import EmbeddingClient
 from chatbi.embedding_vector_rag import (
     DocumentRecord,
     EmbeddingVectorRagService,
@@ -185,12 +189,17 @@ from chatbi.governance.business_table_catalog import BusinessTableCatalog, resol
 from chatbi.governance.query_audit import QueryAuditLog, QueryAuditRecord
 from chatbi.llm import LLMClient, build_llm_client_from_runtime_config
 from chatbi.knowledge import (
+    BgeCrossEncoderReranker,
     ChunkEmbedding,
+    CrossEncoderReranker,
     DocumentChunk,
     InMemoryKnowledgeStore,
     KnowledgeDocument,
     RetrievalQuery,
-    text_embedding,
+)
+from chatbi.knowledge_postgres_vector_source import (
+    PostgresKnowledgeVectorSource,
+    VectorCandidateSource,
 )
 from chatbi.orchestration import AnalyticsServiceRunner, QuestionClassifier, ResultMerger, TaskType
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
@@ -610,8 +619,22 @@ def _build_default_runtime_query_result_store(
 def _load_knowledge_store_from_db(
     connect_fn: Callable[[str], Any],
     database_url: str,
+    embedding_client: EmbeddingClient | None = None,
+    reranker: CrossEncoderReranker | None = None,
+    vector_candidate_source: VectorCandidateSource | None = None,
 ) -> InMemoryKnowledgeStore:
-    store = InMemoryKnowledgeStore()
+    # FR-FV03-014/015: real embeddings, when configured, must reach this
+    # path too — it is the one that actually populates the live, seeded
+    # knowledge store RagAgentRunner queries at chat time, not ingest_document().
+    store = InMemoryKnowledgeStore(
+        embedding_client=embedding_client,
+        # Code-review fix (Spec FV03.3/FV03.5 gap): both were implemented
+        # and tested but never reached this constructor before — see
+        # _build_default_chatbi_application's own comment for the
+        # opt-in flags that gate them.
+        reranker=reranker,
+        vector_candidate_source=vector_candidate_source,
+    )
     try:
         conn = connect_fn(database_url)
         with conn.cursor() as cur:
@@ -652,7 +675,7 @@ def _load_knowledge_store_from_db(
                     ChunkEmbedding(
                         embedding_id=f"{chunk_id}_emb",
                         chunk_id=chunk_id,
-                        embedding_vector=text_embedding(chunk_text),
+                        embedding_vector=store.embed_text(chunk_text),
                     )
                 )
     except Exception:
@@ -665,10 +688,35 @@ def _build_default_chatbi_application(
     readonly_query_connect: Callable[[str], Any] | None = None,
 ) -> ChatBIApplication:
     llm_client = build_llm_client_from_runtime_config(runtime_config)
+    # FR-FV03-015: one embedding-provider switch governs the knowledge
+    # store's embeddings on every path that can populate it, matching what
+    # already selects the vector-only pipeline's provider.
+    knowledge_store_embedding_client = build_knowledge_store_embedding_client(runtime_config)
+    # Code-review fix: Specs FV03.3 (reranking) and FV03.5 (pgvector
+    # narrowing) were fully implemented and tested but never constructed
+    # here — both are opt-in via RuntimeConfig flags (default off), so
+    # enabling either is a deliberate operator action, not a silent
+    # behavior change on deploy.
+    knowledge_store_reranker = BgeCrossEncoderReranker() if runtime_config.reranker_enabled else None
+    knowledge_store_vector_candidate_source = (
+        PostgresKnowledgeVectorSource(connect_psycopg, runtime_config.database_url)
+        if runtime_config.pgvector_search_enabled and runtime_config.database_url
+        else None
+    )
     knowledge_store = (
-        _load_knowledge_store_from_db(connect_psycopg, runtime_config.database_url)
+        _load_knowledge_store_from_db(
+            connect_psycopg,
+            runtime_config.database_url,
+            embedding_client=knowledge_store_embedding_client,
+            reranker=knowledge_store_reranker,
+            vector_candidate_source=knowledge_store_vector_candidate_source,
+        )
         if runtime_config.database_url
-        else InMemoryKnowledgeStore()
+        else InMemoryKnowledgeStore(
+            embedding_client=knowledge_store_embedding_client,
+            reranker=knowledge_store_reranker,
+            vector_candidate_source=knowledge_store_vector_candidate_source,
+        )
     )
     if runtime_config.readonly_database_url is None:
         return ChatBIApplication(
@@ -1738,10 +1786,20 @@ def create_app(
     )
     file_access_checker = FileAccessChecker()
     file_version_manager = FileVersionManager()
+    # Code-review fix: this embedding_client was hardcoded to
+    # MockEmbeddingClient() regardless of runtime_config.embedding_provider
+    # — every uploaded file's chunks were always embedded with the
+    # deterministic mock, never the real configured provider. Reuses the
+    # same helper that already governs the knowledge store's embeddings
+    # (FR-FV03-015), so one configuration switch now covers file uploads
+    # too. FileProcessingWorker's embedding_client is a required
+    # parameter, unlike InMemoryKnowledgeStore's optional one, so the
+    # "mock" case still needs an explicit MockEmbeddingClient() instance.
+    file_processing_embedding_client = build_knowledge_store_embedding_client(active_runtime_config)
     file_processing_worker = FileProcessingWorker(
         storage=active_object_storage_adapter,
         repository=active_file_repository,
-        embedding_client=MockEmbeddingClient(),
+        embedding_client=file_processing_embedding_client or MockEmbeddingClient(),
         vector_sink=active_file_vector_sink,
     )
     active_knowledge_vector_store = (
@@ -1799,6 +1857,10 @@ def create_app(
     file_scoped_retriever = FileScopedRetriever(
         vector_source=active_file_vector_source,
         repository=active_file_repository,
+        # Code-review fix: must match FileProcessingWorker's embedding_client
+        # above — the chunk vectors it searches over were embedded with
+        # this same client, not the deterministic hash-bucket fallback.
+        embedding_client=file_processing_embedding_client,
     )
     question_classifier = QuestionClassifier()
     # Spec FV10.4: one session-scoped file_ids inheritance store (FR-FV10-055)

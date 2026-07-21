@@ -31,6 +31,9 @@ def _eval_case_from_mapping(raw_case: Mapping[str, object], index: int) -> EvalC
         question=question,
         expected_metric_id=expected_metric_id,
         expected_sql_fragments=_string_tuple(raw_case, "expected_sql_fragments", index),
+        # FR-FV03-024/AC-FV03-021: omitting the field defaults to (),
+        # reusing the same string-tuple loader as expected_sql_fragments.
+        expected_chunk_ids=_string_tuple(raw_case, "expected_chunk_ids", index),
         permission_context=_permission_context(raw_case, index),
     )
 

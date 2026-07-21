@@ -107,3 +107,7 @@ If no evidence is found, the system should say so instead of inventing an answer
 5. Add tenant filtering to RAG.
 6. Add citations to answers.
 7. Test that tenant A cannot retrieve tenant B documents.
+
+## 10. Follow-Ups
+
+A code-level audit of the retrieval pipeline actually implemented against this design found the hybrid-scoring architecture already in shape but three of its stages running on placeholders (a fake hash-bucket embedding on one retrieval path, Jaccard token overlap standing in for BM25, and a "rerank" stage that never re-scores anything), plus no retrieval-specific evaluation metric anywhere in the eval suite, and a vector store that is entirely process-local. See [04-followups/](04-followups/README.en.md) for the design to close each gap: unifying the two disjoint retrieval paths and wiring in real embeddings, real BM25 keyword scoring, a genuine cross-encoder rerank stage, a Golden Dataset with Hit Rate/MRR evaluation, and production vector search on pgvector.

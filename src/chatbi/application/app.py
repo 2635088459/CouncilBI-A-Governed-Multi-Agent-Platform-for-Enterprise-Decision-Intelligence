@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from time import monotonic
 
@@ -51,6 +52,7 @@ from chatbi.evaluation_repository import (
 )
 from chatbi.evaluation_report import eval_run_report
 from chatbi.governance.audit import GuardrailAuditRecord
+from chatbi.knowledge import InMemoryKnowledgeStore, RetrievalQuery
 from chatbi.observability import (
     AlertEvaluator,
     InMemoryObservabilityStore,
@@ -66,6 +68,7 @@ from chatbi.observability_logs import (
 )
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.rate_limit import InMemorySlidingWindowRateLimitStore, RateLimitCounterStore
+from chatbi.retrieval_evaluation import RetrievalEvaluationResult, RetrievalEvaluator
 from chatbi.runtime_metrics import RuntimeMetricsSnapshot, runtime_metrics_snapshot
 from chatbi.trace_events import (
     InMemoryTraceEventStore,
@@ -665,16 +668,24 @@ class ChatBIApplication:
             for question in questions
         )
         expectations = self._benchmark_expectations(questions)
+        cases = self._build_eval_cases(observations, expectations)
+        retrieval_results = self._evaluate_retrieval(cases)
+        retrieval_metrics = (
+            RetrievalEvaluator().aggregate(retrieval_results) if retrieval_results else None
+        )
         result = self._evaluation_scorer.score_suite(
             eval_suite_id=payload.eval_suite_id,
             observations=observations,
             expectations=expectations,
+            retrieval_metrics=retrieval_metrics,
         )
         self._persist_eval_run_result(
             eval_run_id=result.eval_run_id,
             eval_suite_id=payload.eval_suite_id,
+            cases=cases,
             observations=observations,
             expectations=expectations,
+            retrieval_results=retrieval_results,
             org_id=org_id,
         )
         if org_id == "org_legacy":
@@ -1113,19 +1124,12 @@ class ChatBIApplication:
             latency_ms=latency_ms,
         )
 
-    def _persist_eval_run_result(
+    def _build_eval_cases(
         self,
-        eval_run_id: str,
-        eval_suite_id: str,
         observations: tuple[EvaluationObservation, ...],
         expectations: dict[str, BenchmarkExpectation],
-        org_id: str = "org_legacy",
-    ) -> None:
-        observations_by_question = {
-            observation.question: observation
-            for observation in observations
-        }
-        cases = tuple(
+    ) -> tuple[EvalCase, ...]:
+        return tuple(
             EvalCase(
                 case_id=self._eval_case_id(index),
                 question=observation.question,
@@ -1133,10 +1137,67 @@ class ChatBIApplication:
                     expectations[observation.question].expected_tables
                     + expectations[observation.question].expected_fields
                 ),
+                expected_chunk_ids=self._expected_chunk_ids_for_question(observation.question),
                 permission_context={"source": "api_eval_run"},
             )
             for index, observation in enumerate(observations, start=1)
         )
+
+    def _expected_chunk_ids_for_question(self, question: str) -> tuple[str, ...]:
+        """FR-FV03-024: opts a case into retrieval scoring only when its
+        question targets one of the real seeded ``knowledge.doc_chunks``
+        rows (migrations.py's ``KNOWLEDGE_RAG_SEED_SQL``); every other
+        question (SQL-only benchmarks, arbitrary caller-supplied text) has
+        no ground truth to score against and stays opted out via the
+        empty-tuple default, matching expected_sql_fragments' convention.
+        """
+
+        normalized = question.strip().lower()
+        if "revenue" in normalized and self._requires_citation(question):
+            return ("rag_revenue_policy_2026_chunk_1",)
+        if "support" in normalized and "ticket" in normalized:
+            return ("doc_support_ops_june_2026_chunk_1",)
+        return ()
+
+    def _evaluate_retrieval(
+        self,
+        cases: tuple[EvalCase, ...],
+    ) -> tuple[RetrievalEvaluationResult, ...]:
+        knowledge_store = self._orchestrator.knowledge_store
+        if knowledge_store is None:
+            return ()
+        return RetrievalEvaluator().evaluate(cases, self._retrieve_chunk_ids_fn(knowledge_store))
+
+    def _retrieve_chunk_ids_fn(
+        self,
+        knowledge_store: InMemoryKnowledgeStore,
+    ) -> Callable[[str], tuple[str, ...]]:
+        def retrieve_fn(question: str) -> tuple[str, ...]:
+            result = knowledge_store.retrieve(
+                RetrievalQuery(question=question, requesting_user_id="eval_runner", top_k=5)
+            )
+            return tuple(
+                f"{item.citation_anchor.split('#chunk-')[0]}_chunk_{item.citation_anchor.split('#chunk-')[1]}"
+                for item in result.evidence_list
+            )
+
+        return retrieve_fn
+
+    def _persist_eval_run_result(
+        self,
+        eval_run_id: str,
+        eval_suite_id: str,
+        cases: tuple[EvalCase, ...],
+        observations: tuple[EvaluationObservation, ...],
+        expectations: dict[str, BenchmarkExpectation],
+        retrieval_results: tuple[RetrievalEvaluationResult, ...],
+        org_id: str = "org_legacy",
+    ) -> None:
+        observations_by_question = {
+            observation.question: observation
+            for observation in observations
+        }
+        retrieval_results_by_case_id = {result.case_id: result for result in retrieval_results}
         self._eval_runner.run(
             eval_suite_id=eval_suite_id,
             cases=cases,
@@ -1144,6 +1205,7 @@ class ChatBIApplication:
                 case=case,
                 observation=observations_by_question[case.question],
                 expectation=expectations[case.question],
+                retrieval_result=retrieval_results_by_case_id.get(case.case_id),
             ),
             eval_run_id=eval_run_id,
             org_id=org_id,
@@ -1154,6 +1216,7 @@ class ChatBIApplication:
         case: EvalCase,
         observation: EvaluationObservation,
         expectation: BenchmarkExpectation,
+        retrieval_result: RetrievalEvaluationResult | None = None,
     ) -> EvalScore:
         case_result = self._evaluation_scorer.score_case(
             observation=observation,
@@ -1165,6 +1228,10 @@ class ChatBIApplication:
             sql_safe=self._eval_sql_safe(observation, expectation),
             rag_faithful=self._eval_rag_faithful(observation, expectation),
             answer_quality_score=case_result.score,
+            retrieval_hit_at_3=retrieval_result.hit_at_3 if retrieval_result is not None else None,
+            retrieval_reciprocal_rank=(
+                retrieval_result.reciprocal_rank_value if retrieval_result is not None else None
+            ),
         )
 
     def _eval_sql_correct(

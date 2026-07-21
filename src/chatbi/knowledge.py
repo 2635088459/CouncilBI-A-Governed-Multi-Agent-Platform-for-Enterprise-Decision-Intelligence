@@ -11,10 +11,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from math import sqrt
 from time import perf_counter
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Protocol
+import logging
 import re
 
+from rank_bm25 import BM25Okapi
+
 from chatbi.core.contracts import EvidenceItem, RetrievalStats
+from chatbi.embedding_vector_rag import EmbeddingClient, EmbeddingRequest
+from chatbi.knowledge_postgres_vector_source import VectorCandidateSource
+
+_logger = logging.getLogger(__name__)
 
 
 def _empty_metadata() -> Mapping[str, Any]:
@@ -116,6 +123,9 @@ class InMemoryKnowledgeStore:
     def __init__(
         self,
         shared_visibility_resolver: Callable[[KnowledgeDocument], frozenset[str]] | None = None,
+        embedding_client: EmbeddingClient | None = None,
+        reranker: "CrossEncoderReranker | None" = None,
+        vector_candidate_source: VectorCandidateSource | None = None,
     ) -> None:
         self._documents_by_source_id: dict[str, KnowledgeDocument] = {}
         self._chunks_by_chunk_id: dict[str, DocumentChunk] = {}
@@ -127,6 +137,49 @@ class InMemoryKnowledgeStore:
         self._shared_visibility_resolver: Callable[[KnowledgeDocument], frozenset[str]] = (
             shared_visibility_resolver or _no_shared_visibility
         )
+        # FR-FV03-014: real embeddings for the hybrid retrieval path (Spec
+        # FV03.1). None keeps the deterministic hash-bucket text_embedding()
+        # fallback every existing test already relies on.
+        self._embedding_client = embedding_client
+        # FR-FV03-021: cross-encoder rerank stage (Spec FV03.3). None keeps
+        # today's behavior of dedupe/truncate over the hybrid-ranked order
+        # with no second-pass re-scoring.
+        self._reranker = reranker
+        # FR-FV03-032: pluggable vector-candidate-generation step (Spec
+        # FV03.5). None keeps today's in-memory linear cosine scan over
+        # every filtered record — the only behavior every existing test
+        # exercises.
+        self._vector_candidate_source = vector_candidate_source
+
+    def embed_text(
+        self,
+        text: str,
+        embedding_client: EmbeddingClient | None = None,
+        trace_id: str = "trc_knowledge_store_embed",
+        org_id: str = "org_legacy",
+    ) -> tuple[float, ...]:
+        """FR-FV03-014: embed ``text`` with the given/constructor-level
+        ``EmbeddingClient`` if one is available (method-level argument
+        takes precedence), falling back to the deterministic hash-bucket
+        ``text_embedding()`` otherwise.
+
+        Every production call site that builds a ``ChunkEmbedding`` for this
+        store (``ingest_document`` below, ``http._load_knowledge_store_from_db``,
+        ``files.promotion``'s live-RAG indexing) goes through this method
+        instead of calling ``text_embedding()`` directly, so one embedding
+        provider switch governs all of them. ``trace_id``/``org_id`` default
+        to this store's own ingestion-time identifiers rather than a live
+        request's, since ingestion is not itself a traced chat request;
+        callers with a real trace/org context may pass their own.
+        """
+
+        active_client = embedding_client or self._embedding_client
+        if active_client is not None:
+            response = active_client.embed(
+                EmbeddingRequest(trace_id=trace_id, org_id=org_id, input_texts=(text,))
+            )
+            return response.vectors[0]
+        return text_embedding(text)
 
     def set_shared_visibility_resolver(
         self, resolver: Callable[[KnowledgeDocument], frozenset[str]]
@@ -183,12 +236,17 @@ class InMemoryKnowledgeStore:
         raw_text: str,
         chunk_size: int = 90,
         chunk_overlap: int = 15,
+        embedding_client: EmbeddingClient | None = None,
     ) -> tuple[KnowledgeChunkRecord, ...]:
         """Clean, chunk, embed, and index one document.
 
         The unit is words instead of tokens because this project does not have
         a tokenizer dependency yet. The shape mirrors the real offline RAG
         flow: document -> clean -> chunk -> embed -> index.
+
+        FR-FV03-014: ``embedding_client`` (or the one passed to this store's
+        constructor) governs the vector each chunk is stored with; omitting
+        both keeps the deterministic hash-bucket fallback.
         """
 
         self.save_document(document)
@@ -208,7 +266,7 @@ class InMemoryKnowledgeStore:
             embedding = ChunkEmbedding(
                 embedding_id=f"{document.source_id}_embedding_{index}",
                 chunk_id=chunk.chunk_id,
-                embedding_vector=text_embedding(text),
+                embedding_vector=self.embed_text(text, embedding_client),
             )
             self.save_chunk(chunk)
             self.save_embedding(embedding)
@@ -290,8 +348,30 @@ class InMemoryKnowledgeStore:
             tags=query.tags,
             requesting_user_id=query.requesting_user_id,
         )
-        ranked_records = self._rank_records(filtered_records, query)
-        selected_records = self._dedupe_adjacent_chunks(ranked_records[: max(query.top_k * 2, query.top_k)])
+        # FR-FV10-052/056: folding recent-turn context into the retrieval
+        # text lets a follow-up like "why did that happen?" still match
+        # documents about the actual subject from the prior turn, with no
+        # separate rewrite step.
+        #
+        # Computed once here — via embed_text(), so it uses this store's
+        # real configured EmbeddingClient rather than always falling back
+        # to the deterministic hash — and passed to both the vector
+        # narrowing step and hybrid ranking below, so they agree on both
+        # the embedding provider and the text basis instead of each
+        # independently recomputing their own (previously divergent)
+        # fallback.
+        query_text = f"{query.question} {query.metric_context} {query.conversation_context}".strip()
+        query_embedding = query.query_embedding or self.embed_text(query_text)
+        # FR-FV03-032: narrows toward (never widens beyond) the permission
+        # filtering list_chunk_records() already applied above.
+        filtered_records = self._narrow_by_vector_candidates(filtered_records, query, query_embedding)
+        ranked_records = self._rank_records(filtered_records, query, query_text, query_embedding)
+        narrowed_records = ranked_records[: max(query.top_k * 2, query.top_k)]
+        # FR-FV03-021: genuine second-pass re-scoring of the narrowed
+        # candidate window, bounded regardless of corpus size — reranking
+        # never runs on more than max(top_k * 2, top_k) chunks.
+        reranked_records, did_rerank = rerank(query.question, narrowed_records, self._reranker)
+        selected_records = self._dedupe_adjacent_chunks(reranked_records)
         selected_records = selected_records[: query.top_k]
         evidence_list = tuple(record.to_evidence_item() for record in selected_records)
         latency_ms = (perf_counter() - started_at) * 1000
@@ -305,7 +385,12 @@ class InMemoryKnowledgeStore:
             retrieval_stats=RetrievalStats(
                 candidate_count=len(self._chunks_by_chunk_id),
                 filtered_count=len(filtered_records),
-                reranked_count=len(ranked_records),
+                # FR-FV03-022: reflects candidates that actually passed
+                # through the cross-encoder — did_rerank is False both when
+                # no reranker is configured and when a configured one
+                # failed and rerank() fell back, so a broken reranker no
+                # longer misreports as a successful one.
+                reranked_count=len(narrowed_records) if did_rerank else 0,
                 selected_count=len(evidence_list),
                 latency_ms=latency_ms,
             ),
@@ -338,22 +423,70 @@ class InMemoryKnowledgeStore:
     def _shared_visibility(self, document: KnowledgeDocument) -> frozenset[str]:
         return self._shared_visibility_resolver(document)
 
+    def _narrow_by_vector_candidates(
+        self,
+        filtered_records: tuple[KnowledgeChunkRecord, ...],
+        query: RetrievalQuery,
+        query_embedding: tuple[float, ...],
+    ) -> tuple[KnowledgeChunkRecord, ...]:
+        """FR-FV03-032/034 (Spec FV03.5): intersects, never replaces,
+        ``list_chunk_records()``'s own permission filtering — the source's
+        known gap (no shared-visibility support, see
+        ``PostgresKnowledgeVectorSource``'s own docstring) means it is only
+        ever a narrowing prefilter, not the authority. Any error narrows to
+        nothing extra (falls back to ``filtered_records`` unchanged) rather
+        than failing the request, the same "degrade, don't crash" posture
+        ``rerank()`` already established for Spec FV03.3.
+
+        ``query_embedding`` is computed once by the caller (``retrieve()``),
+        via ``embed_text()``, so this narrowing step searches the *same*
+        embedding space ``knowledge.doc_embeddings`` was populated in —
+        never a hash-bucket fallback compared against real document
+        vectors.
+        """
+
+        if self._vector_candidate_source is None:
+            return filtered_records
+        try:
+            candidates = self._vector_candidate_source.top_chunk_ids(
+                query_vector=query_embedding,
+                requesting_user_id=query.requesting_user_id,
+                user_role=query.user_role,
+                doc_type=query.doc_type,
+                doc_types=query.doc_types,
+                limit=max(query.top_k * 4, 20),
+            )
+        except Exception:
+            _logger.warning(
+                "vector_candidate_source.top_chunk_ids() failed; falling back to the"
+                " full permission-filtered candidate set for this request.",
+                exc_info=True,
+            )
+            return filtered_records
+        candidate_chunk_ids = {chunk_id for chunk_id, _distance in candidates}
+        return tuple(
+            record for record in filtered_records if record.chunk.chunk_id in candidate_chunk_ids
+        )
+
     def _rank_records(
         self,
         records: tuple[KnowledgeChunkRecord, ...],
         query: RetrievalQuery,
+        query_text: str,
+        query_embedding: tuple[float, ...],
     ) -> tuple[KnowledgeChunkRecord, ...]:
-        # FR-FV10-052/056: folding recent-turn context into the retrieval
-        # text lets a follow-up like "why did that happen?" still match
-        # documents about the actual subject from the prior turn, with no
-        # separate rewrite step.
-        query_text = f"{query.question} {query.metric_context} {query.conversation_context}".strip()
-        query_tokens = text_tokens(query_text)
-        query_embedding = query.query_embedding or text_embedding(query_text)
         scored_records: list[KnowledgeChunkRecord] = []
 
-        for record in records:
-            keyword_score = keyword_overlap_score(query_tokens, text_tokens(record.chunk.chunk_text))
+        # FR-FV03-018: BM25 built fresh over exactly this request's already
+        # permission-filtered candidate set — no persistent/global index, so
+        # no document outside `records` can influence these IDF statistics.
+        keyword_scores = (
+            Bm25CandidateScorer(records).scores(cjk_and_ascii_tokens(query_text))
+            if records
+            else ()
+        )
+
+        for record, keyword_score in zip(records, keyword_scores):
             vector_score = cosine_similarity(
                 query_embedding,
                 record.embedding.embedding_vector if record.embedding is not None else text_embedding(record.chunk.chunk_text),
@@ -387,32 +520,46 @@ class InMemoryKnowledgeStore:
         self,
         records: tuple[KnowledgeChunkRecord, ...],
     ) -> tuple[KnowledgeChunkRecord, ...]:
+        """Merge adjacent same-document chunks, preserving ``records``' own
+        incoming order (by the earliest input position among each merged
+        record's constituent chunks) rather than re-deriving an order from
+        ``relevance_score``.
+
+        FR-FV03-021: this matters once a cross-encoder reranker has already
+        re-sorted ``records`` — re-sorting by ``relevance_score`` here would
+        silently discard that rerank order and fall back to the pre-rerank
+        hybrid score, since ``rerank()`` reorders records without rewriting
+        their ``relevance_score`` field. When no reranker is configured,
+        ``records`` already arrives in ``_rank_records()``'s relevance-sorted
+        order, so preserving input order reproduces the same output this
+        method produced before FR-FV03-021.
+        """
+
         if not records:
             return ()
 
+        order_index = {id(record): index for index, record in enumerate(records)}
         records_by_doc: dict[str, list[KnowledgeChunkRecord]] = {}
         for record in records:
             records_by_doc.setdefault(record.document.source_id, []).append(record)
 
-        merged_records: list[KnowledgeChunkRecord] = []
+        merged_with_order: list[tuple[int, KnowledgeChunkRecord]] = []
         for doc_records in records_by_doc.values():
             sorted_records = sorted(doc_records, key=lambda item: item.chunk.chunk_index)
             current = sorted_records[0]
+            current_min_index = order_index[id(current)]
             for next_record in sorted_records[1:]:
                 if next_record.chunk.chunk_index == current.chunk.chunk_index + 1:
+                    current_min_index = min(current_min_index, order_index[id(next_record)])
                     current = self._merge_records(current, next_record)
                     continue
-                merged_records.append(current)
+                merged_with_order.append((current_min_index, current))
                 current = next_record
-            merged_records.append(current)
+                current_min_index = order_index[id(current)]
+            merged_with_order.append((current_min_index, current))
 
-        return tuple(
-            sorted(
-                merged_records,
-                key=lambda item: (item.relevance_score, item.document.publish_time),
-                reverse=True,
-            )
-        )
+        merged_with_order.sort(key=lambda item: item[0])
+        return tuple(record for _, record in merged_with_order)
 
     def _merge_records(
         self,
@@ -503,12 +650,77 @@ def text_tokens(text: str) -> tuple[str, ...]:
 
 
 def keyword_overlap_score(query_tokens: tuple[str, ...], chunk_tokens: tuple[str, ...]) -> float:
+    """Query-token-coverage ratio still used by FileScopedRetriever (Spec
+    FV10.6) against user-uploaded-file candidates — out of Spec FV03.2's
+    scope, which only replaces InMemoryKnowledgeStore._rank_records()'s own
+    keyword term with BM25 (see cjk_and_ascii_tokens/Bm25CandidateScorer
+    below)."""
+
     if not query_tokens or not chunk_tokens:
         return 0.0
 
     query_set = set(query_tokens)
     chunk_set = set(chunk_tokens)
     return len(query_set & chunk_set) / len(query_set)
+
+
+def cjk_and_ascii_tokens(text: str) -> tuple[str, ...]:
+    """FR-FV03-019: BM25 tokenization — ASCII word tokens (matching
+    ``text_tokens()``) plus CJK unigrams, so Chinese-language chunks and
+    questions are not silently dropped from keyword scoring the way they
+    are by the ASCII-only ``[a-z0-9]+`` pattern ``text_tokens()`` uses for
+    the (unrelated) deterministic hash-bucket embedding.
+    """
+
+    ascii_tokens = re.findall(r"[a-z0-9]+", text.lower())
+    cjk_tokens = re.findall(r"[一-鿿]", text)
+    return tuple(ascii_tokens) + tuple(cjk_tokens)
+
+
+def normalize_scores(raw_scores: tuple[float, ...]) -> tuple[float, ...]:
+    """FR-FV03-020: min-max normalize BM25's unbounded raw scores into a
+    range comparable to the [0, 1]-bounded cosine_similarity term.
+
+    An all-equal input (including a single-candidate corpus, where BM25
+    degenerates to identical scores) maps to a neutral 0.5, not 0.0: with
+    only one document in the corpus, standard Okapi BM25's IDF term is
+    itself corpus-size-dependent and commonly negative even for a genuine
+    keyword match (a term appearing in 100% of a 1-document corpus reads
+    as "common", not "rare") — so the raw score's sign is not a reliable
+    signal of relevance here, and forcing it to 0.0 previously suppressed
+    real single-candidate matches outright. 0.5 lets keyword scoring defer
+    to the vector/source-weight terms in the fusion formula in this
+    genuinely-indeterminate case, rather than actively arguing against
+    relevance the way 0.0 did.
+    """
+
+    if not raw_scores:
+        return raw_scores
+    lo, hi = min(raw_scores), max(raw_scores)
+    if hi == lo:
+        return tuple(0.5 for _ in raw_scores)
+    return tuple((score - lo) / (hi - lo) for score in raw_scores)
+
+
+class Bm25CandidateScorer:
+    """FR-FV03-018: BM25 keyword scoring, built fresh per request over
+    exactly the caller's already permission-filtered candidate set — never
+    a persistent or pre-built index, so this request's IDF statistics
+    cannot be influenced by, or leak information about, any document
+    outside that set.
+    """
+
+    def __init__(self, records: tuple[KnowledgeChunkRecord, ...]) -> None:
+        self._records = records
+        corpus = [cjk_and_ascii_tokens(record.chunk.chunk_text) for record in records]
+        self._bm25 = BM25Okapi(corpus)
+
+    def scores(self, query_tokens: tuple[str, ...]) -> tuple[float, ...]:
+        # rank_bm25 ships no type stubs; get_scores()'s return type is
+        # untyped from pyright's perspective, hence the blanket ignore.
+        raw_scores_array = self._bm25.get_scores(list(query_tokens))  # type: ignore
+        raw_scores = tuple(float(score) for score in raw_scores_array)  # type: ignore
+        return normalize_scores(raw_scores)
 
 
 def cosine_similarity(left: tuple[float, ...], right: tuple[float, ...]) -> float:
@@ -536,3 +748,66 @@ def _source_weight(doc_type: str) -> float:
         "report": 0.02,
     }
     return weights.get(doc_type, 0.01)
+
+
+class CrossEncoderReranker(Protocol):
+    """FR-FV03-021: a second-pass re-scorer that reads (question, chunk)
+    pairs jointly, unlike the independently-computed keyword/vector scores
+    _rank_records() fuses beforehand."""
+
+    def score(self, pairs: tuple[tuple[str, str], ...]) -> tuple[float, ...]:
+        ...
+
+
+class BgeCrossEncoderReranker:
+    """FR-FV03-021 / NFR-FV03-009: loads BAAI/bge-reranker-base once,
+    lazily, at first use — not per request. Requires the optional
+    ``rerank`` extra (``sentence-transformers``); importing this class
+    without it installed only fails once ``score()`` is actually called,
+    not at import time.
+    """
+
+    def __init__(self, model_name: str = "BAAI/bge-reranker-base") -> None:
+        self._model_name = model_name
+        self._model: Any = None
+
+    def score(self, pairs: tuple[tuple[str, str], ...]) -> tuple[float, ...]:
+        if self._model is None:
+            from sentence_transformers import CrossEncoder  # type: ignore
+
+            self._model = CrossEncoder(self._model_name)
+        raw_scores = self._model.predict(list(pairs))  # type: ignore
+        return tuple(float(score) for score in raw_scores)  # type: ignore
+
+
+def rerank(
+    question: str,
+    candidates: tuple[KnowledgeChunkRecord, ...],
+    reranker: CrossEncoderReranker | None,
+) -> tuple[tuple[KnowledgeChunkRecord, ...], bool]:
+    """FR-FV03-023: on reranker absence or any error, returns candidates
+    unchanged (the pre-rerank hybrid ordering) rather than propagating —
+    evidence with slightly worse ranking is strictly better than a failed
+    request, the same "degrade, don't crash" posture this project's
+    orchestrator already applies to non-critical agent failures.
+
+    Returns ``(records, did_rerank)`` — ``did_rerank`` is ``True`` only when
+    a reranker was configured AND actually scored the candidates, so a
+    caller (``retrieve()``'s ``RetrievalStats.reranked_count``) can tell a
+    genuine rerank pass apart from a silent fallback, instead of inferring
+    success from "a reranker happened to be configured."
+    """
+
+    if reranker is None or not candidates:
+        return candidates, False
+    try:
+        pairs = tuple((question, record.chunk.chunk_text) for record in candidates)
+        scores = reranker.score(pairs)
+    except Exception:
+        _logger.warning(
+            "Cross-encoder reranker failed; falling back to the pre-rerank hybrid ordering.",
+            exc_info=True,
+        )
+        return candidates, False
+    ranked = sorted(zip(candidates, scores), key=lambda item: item[1], reverse=True)
+    return tuple(record for record, _ in ranked), True
