@@ -53,20 +53,21 @@ from chatbi.evaluation_repository import (
     InMemoryEvaluationRepository,
 )
 from chatbi.evaluation_report import eval_run_report
+from chatbi.golden_dataset_mining import RetrievalLabelingCandidate, mine_retrieval_labeling_candidates
 from chatbi.governance.audit import GuardrailAuditRecord
 from chatbi.knowledge import InMemoryKnowledgeStore, RetrievalQuery
 from chatbi.observability import (
     AlertEvaluator,
-    InMemoryObservabilityStore,
+    ObservabilityStore,
     RuntimeRequestSample,
     TraceRecorder,
     TraceSpanName,
     TraceSpanStatus,
 )
 from chatbi.observability_logs import (
-    InMemoryObservabilityLogStore,
     LogLevel,
     ObservabilityLogger,
+    ObservabilityLogStore,
 )
 from chatbi.orchestration.simple_orchestrator import SimpleOrchestrator
 from chatbi.rate_limit import InMemorySlidingWindowRateLimitStore, RateLimitCounterStore
@@ -131,6 +132,7 @@ class ChatBIApplication:
         evaluation_repository: EvaluationRepository | None = None,
         user_rate_limit_store: RateLimitCounterStore | None = None,
         org_rate_limit_store: RateLimitCounterStore | None = None,
+        closeable_resources: tuple[Callable[[], None], ...] = (),
     ) -> None:
         self._orchestrator = orchestrator or SimpleOrchestrator()
         self._data_model_catalog = data_model_catalog or build_default_data_model_catalog()
@@ -154,6 +156,22 @@ class ChatBIApplication:
         self._evaluation_repository = evaluation_repository or InMemoryEvaluationRepository()
         self._eval_runner = EvalRunner(self._evaluation_repository)
         self._trace_event_recorder = TraceEventRecorder(service="backend-api")
+        # Spec 4.7 follow-up: a generic hook for resources this application
+        # was handed but does not otherwise own the lifecycle of — e.g. the
+        # observability ConnectionPool _build_default_chatbi_application()
+        # (api/http.py) constructs and shares between trace_recorder/
+        # observability_logger. Empty by default; nothing to close for the
+        # common in-memory-everything case every existing test exercises.
+        self._closeable_resources = closeable_resources
+
+    def close(self) -> None:
+        """Releases any resources this application was constructed with —
+        called from create_app()'s shutdown lifespan (api/http.py), not
+        from any request-handling path. Safe to call even when nothing was
+        registered (the common case)."""
+
+        for close_resource in self._closeable_resources:
+            close_resource()
 
     @property
     def orchestrator(self) -> SimpleOrchestrator:
@@ -164,11 +182,11 @@ class ChatBIApplication:
         return tuple(self._audit_records)
 
     @property
-    def observability_store(self) -> InMemoryObservabilityStore:
+    def observability_store(self) -> ObservabilityStore:
         return self._trace_recorder.store
 
     @property
-    def observability_log_store(self) -> InMemoryObservabilityLogStore:
+    def observability_log_store(self) -> ObservabilityLogStore:
         return self._observability_logger.store
 
     @property
@@ -181,6 +199,27 @@ class ChatBIApplication:
 
     def runtime_metrics_snapshot(self) -> RuntimeMetricsSnapshot:
         return runtime_metrics_snapshot(tuple(self._runtime_samples))
+
+    def mine_golden_dataset_candidates(
+        self, top_k: int = 5
+    ) -> tuple[RetrievalLabelingCandidate, ...]:
+        """Spec 4.6 §3.4 follow-up: surfaces real questions this process has
+        actually answered with nonzero RAG evidence, as a human-reviewable
+        shortlist for growing golden_dataset/cases.json — an internal/ops
+        tool, not a public API surface, so it deliberately skips the
+        rate-limit/audit/envelope ceremony every handle_*() method applies
+        to caller-facing requests. Only sees traffic from this process's own
+        uptime (observability_logs.py/observability.py are in-memory-only
+        today); mining a full deployment's history needs those stores made
+        durable first (see golden_dataset_mining.py's own module docstring).
+        """
+
+        return mine_retrieval_labeling_candidates(
+            log_store=self._observability_logger.store,
+            trace_store=self._trace_recorder.store,
+            knowledge_store=self._orchestrator.knowledge_store or InMemoryKnowledgeStore(),
+            top_k=top_k,
+        )
 
     def record_api_audit(
         self,

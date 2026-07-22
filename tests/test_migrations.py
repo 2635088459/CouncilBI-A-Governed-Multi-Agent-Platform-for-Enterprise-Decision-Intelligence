@@ -41,6 +41,7 @@ from chatbi.migrations import (
     KNOWLEDGE_VECTOR_SEARCH_SQL,
     MIGRATION_METADATA_TABLE,
     MIGRATION_METADATA_TABLE_SQL,
+    OBSERVABILITY_TABLES_SQL,
     RAG_V2_CHUNKS_TABLE,
     RAG_V2_DOCUMENTS_TABLE,
     RAG_V2_EMBEDDING_METADATA_TABLE,
@@ -104,6 +105,7 @@ def test_v2_schemas_sql_creates_all_required_schema_layers() -> None:
         "rag",
         "analytics",
         "auth",
+        "observability",
     )
     for schema_name in V2_SCHEMA_NAMES:
         assert f"CREATE SCHEMA IF NOT EXISTS {schema_name};" in V2_SCHEMAS_SQL
@@ -133,6 +135,7 @@ def test_base_migration_sql_statements_are_ordered_for_dependencies() -> None:
         RUNTIME_QUERY_HISTORY_TABLE_SQL,
         RUNTIME_QUERY_RESULTS_TABLE_SQL,
         RUNTIME_AGENT_TRACES_TABLE_SQL,
+        OBSERVABILITY_TABLES_SQL,
         GOVERNANCE_AUDIT_TABLES_SQL,
         DEMO_COMPLETED_QUERY_SEED_SQL,
     )
@@ -520,6 +523,24 @@ def test_runtime_agent_traces_table_sql_links_trace_and_query_result() -> None:
     assert "idx_runtime_agent_traces_trace_id" in normalized_sql
     assert "idx_runtime_agent_traces_query_result_id" in normalized_sql
     assert "idx_runtime_agent_traces_agent_status" in normalized_sql
+
+
+def test_observability_tables_sql_creates_durable_log_and_span_storage() -> None:
+    # Spec 4.7: durable backing for ObservabilityLogStore/ObservabilityStore
+    # so golden_dataset_mining.py can mine a deployment's full question
+    # history, not just what it saw since its last restart.
+    normalized_sql = " ".join(OBSERVABILITY_TABLES_SQL.split())
+
+    assert "CREATE SCHEMA IF NOT EXISTS observability;" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS observability.log_records" in normalized_sql
+    assert "log_id TEXT PRIMARY KEY" in normalized_sql
+    assert "trace_id TEXT NOT NULL" in normalized_sql
+    assert "attributes JSONB NOT NULL DEFAULT '{}'::jsonb" in normalized_sql
+    assert "idx_observability_log_records_trace_id" in normalized_sql
+    assert "CREATE TABLE IF NOT EXISTS observability.trace_spans" in normalized_sql
+    assert "span_id TEXT PRIMARY KEY" in normalized_sql
+    assert "duration_ms INTEGER CHECK (duration_ms >= 0)" in normalized_sql
+    assert "idx_observability_trace_spans_trace_id" in normalized_sql
 
 
 def test_governance_audit_tables_sql_creates_guardrail_audit_tables() -> None:

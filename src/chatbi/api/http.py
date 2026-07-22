@@ -8,7 +8,7 @@ import os
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Mapping, Sequence, cast
 from uuid import uuid4
@@ -17,6 +17,7 @@ import duckdb
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
+from psycopg_pool import ConnectionPool
 from pydantic import BaseModel
 
 from chatbi.analytics import (
@@ -184,7 +185,9 @@ from chatbi.governance import (
     SimpleSqlGuardrailV2,
     postgres_guardrail_audit_log_v2_from_psycopg,
 )
-from chatbi.observability_logs import LogLevel, ObservabilityLogger
+from chatbi.observability import ObservabilityStore, TraceRecorder
+from chatbi.observability_logs import LogLevel, ObservabilityLogger, ObservabilityLogStore
+from chatbi.observability_postgres import PostgresObservabilityLogStore, PostgresObservabilityStore
 from chatbi.governance.business_table_catalog import BusinessTableCatalog, resolve_federated_pg_context
 from chatbi.governance.query_audit import QueryAuditLog, QueryAuditRecord
 from chatbi.llm import LLMClient, build_llm_client_from_runtime_config
@@ -750,6 +753,41 @@ def _build_default_chatbi_application(
         if runtime_config.pgvector_search_enabled and runtime_config.database_url
         else None
     )
+    # Spec 4.7: durable observability log/trace storage, opt-in via the same
+    # RuntimeConfig-flag convention as the reranker/pgvector wiring above —
+    # off by default so golden_dataset_mining.py's in-memory-only behavior
+    # (mining only sees the current process's uptime) is unchanged unless an
+    # operator deliberately turns this on.
+    #
+    # Code-review follow-up: a single chat request writes 3-5 log
+    # records/spans through these two stores, far more than the
+    # once-per-request pgvector narrowing call above — a fresh
+    # connect-and-close per call (this project's usual Postgres pattern)
+    # would multiply connection churn accordingly. One shared
+    # ConnectionPool is constructed here and handed to both stores instead,
+    # so they reuse a small set of already-open connections rather than
+    # opening a new one on every single write.
+    observability_connection_pool = (
+        ConnectionPool(runtime_config.database_url, min_size=1, max_size=10, open=True)
+        if runtime_config.observability_postgres_enabled and runtime_config.database_url
+        else None
+    )
+    trace_recorder = TraceRecorder(
+        store=PostgresObservabilityStore(observability_connection_pool)
+        if observability_connection_pool is not None
+        else None
+    )
+    observability_logger = ObservabilityLogger(
+        store=PostgresObservabilityLogStore(observability_connection_pool)
+        if observability_connection_pool is not None
+        else None
+    )
+    # Code-review follow-up: nothing closed this pool on application
+    # shutdown before — create_app()'s retention-sweep lifespan (api/http.py)
+    # now also calls ChatBIApplication.close(), which runs this.
+    observability_closeable_resources = (
+        (observability_connection_pool.close,) if observability_connection_pool is not None else ()
+    )
     knowledge_store = (
         _load_knowledge_store_from_db(
             connect_psycopg,
@@ -771,7 +809,10 @@ def _build_default_chatbi_application(
                 llm_client=llm_client,
                 knowledge_store=knowledge_store,
                 conversation_context_turns=runtime_config.conversation_context_turns,
-            )
+            ),
+            trace_recorder=trace_recorder,
+            observability_logger=observability_logger,
+            closeable_resources=observability_closeable_resources,
         )
 
     return ChatBIApplication(
@@ -783,7 +824,10 @@ def _build_default_chatbi_application(
             ),
             readonly_database_url=runtime_config.readonly_database_url,
             conversation_context_turns=runtime_config.conversation_context_turns,
-        )
+        ),
+        trace_recorder=trace_recorder,
+        observability_logger=observability_logger,
+        closeable_resources=observability_closeable_resources,
     )
 
 
@@ -1734,6 +1778,31 @@ async def _run_retention_sweep_loop(worker: RetentionWorker, interval_seconds: f
     while True:
         try:
             worker.run()
+        except Exception:
+            pass  # a transient failure must not kill the schedule itself
+        await asyncio.sleep(interval_seconds)
+
+
+async def _run_observability_retention_sweep_loop(
+    log_store: ObservabilityLogStore,
+    trace_store: ObservabilityStore,
+    retention_days: int,
+    interval_seconds: float,
+) -> None:
+    """FR-FV03-043: durable observability storage (Spec 4.7) otherwise grows
+    without bound — prunes every log record/trace span older than
+    retention_days on the same schedule as the file-retention sweep above,
+    for the same "single in-process loop, not a distributed job queue"
+    reason. A no-op each pass when the in-memory defaults are in use (there
+    is nothing wrong with pruning those too, but the flag most deployments
+    will actually run this for is CHATBI_OBSERVABILITY_POSTGRES_ENABLED).
+    """
+
+    while True:
+        try:
+            cutoff_at = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            log_store.prune_older_than(cutoff_at)
+            trace_store.prune_older_than(cutoff_at)
         except Exception:
             pass  # a transient failure must not kill the schedule itself
         await asyncio.sleep(interval_seconds)
@@ -5765,14 +5834,36 @@ def create_app(
         task = asyncio.create_task(
             _run_retention_sweep_loop(retention_worker, retention_sweep_interval_seconds)
         )
+        # FR-FV03-043 (Spec 4.7): prunes durable observability storage on
+        # the same schedule, composed into this existing lifespan rather
+        # than a second one, since FastAPI only keeps a single
+        # lifespan_context per router.
+        observability_retention_task = asyncio.create_task(
+            _run_observability_retention_sweep_loop(
+                chatbi_application.observability_log_store,
+                chatbi_application.observability_store,
+                active_runtime_config.observability_retention_days,
+                retention_sweep_interval_seconds,
+            )
+        )
         try:
             yield
         finally:
             task.cancel()
+            observability_retention_task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+            try:
+                await observability_retention_task
+            except asyncio.CancelledError:
+                pass
+            # Code-review follow-up (Spec 4.7): releases the observability
+            # ConnectionPool _build_default_chatbi_application() may have
+            # constructed — a no-op when nothing was registered (the
+            # default, in-memory-everything case).
+            chatbi_application.close()
 
     # Reassigning Router.lifespan_context after construction (rather than
     # passing lifespan= to FastAPI(...) up front) because retention_worker

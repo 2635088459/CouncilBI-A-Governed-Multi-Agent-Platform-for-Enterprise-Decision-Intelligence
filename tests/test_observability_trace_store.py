@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from chatbi.observability import (
@@ -87,6 +89,36 @@ def test_trace_recorder_records_failed_run_span_and_reraises() -> None:
     assert len(spans) == 1
     assert spans[0].status is TraceSpanStatus.FAILED
     assert spans[0].duration_ms is not None
+
+
+def test_observability_store_prune_older_than_removes_only_stale_spans() -> None:
+    # FR-FV03-043: durable storage otherwise grows without bound — a
+    # retention sweep (api/http.py) calls this on a schedule.
+    store = InMemoryObservabilityStore()
+    now = datetime.now(timezone.utc)
+    store.add_span(
+        ObservabilitySpan(
+            trace_id="trc_old",
+            span_name=TraceSpanName.REQUEST_RECEIVED,
+            status=TraceSpanStatus.SUCCEEDED,
+            occurred_at=now - timedelta(days=40),
+        )
+    )
+    store.add_span(
+        ObservabilitySpan(
+            trace_id="trc_recent",
+            span_name=TraceSpanName.REQUEST_RECEIVED,
+            status=TraceSpanStatus.SUCCEEDED,
+            occurred_at=now,
+        )
+    )
+
+    removed_count = store.prune_older_than(now - timedelta(days=30))
+
+    assert removed_count == 1
+    remaining = store.list_all()
+    assert len(remaining) == 1
+    assert remaining[0].trace_id == "trc_recent"
 
 
 def test_observability_span_rejects_invalid_trace_id_prefix() -> None:

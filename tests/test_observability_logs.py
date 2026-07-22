@@ -1,10 +1,12 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 from chatbi.observability_logs import (
     InMemoryObservabilityLogStore,
     LogLevel,
     LogSanitizer,
     ObservabilityLogger,
+    ObservabilityLogRecord,
     render_observability_json_log,
     render_observability_json_logs,
 )
@@ -136,6 +138,40 @@ def test_observability_log_store_lists_records_by_trace_id() -> None:
     assert len(records) == 1
     assert records[0].trace_id == "trc_one"
     assert len(store.list_all()) == 2
+
+
+def test_observability_log_store_prune_older_than_removes_only_stale_records() -> None:
+    # FR-FV03-043: durable storage otherwise grows without bound — a
+    # retention sweep (api/http.py) calls this on a schedule.
+    store = InMemoryObservabilityLogStore()
+    now = datetime.now(timezone.utc)
+    store.add(
+        ObservabilityLogRecord(
+            trace_id="trc_old",
+            level=LogLevel.INFO,
+            message="old",
+            endpoint="/api/v1/chat/query",
+            user_id="u_001",
+            recorded_at=now - timedelta(days=40),
+        )
+    )
+    store.add(
+        ObservabilityLogRecord(
+            trace_id="trc_recent",
+            level=LogLevel.INFO,
+            message="recent",
+            endpoint="/api/v1/chat/query",
+            user_id="u_001",
+            recorded_at=now,
+        )
+    )
+
+    removed_count = store.prune_older_than(now - timedelta(days=30))
+
+    assert removed_count == 1
+    remaining = store.list_all()
+    assert len(remaining) == 1
+    assert remaining[0].trace_id == "trc_recent"
 
 
 def test_observability_logger_supports_v2_required_structured_fields() -> None:

@@ -40,6 +40,16 @@ class RuntimeConfig:
     # opt-in-via-env-var convention (embedding_provider, vector_store_url).
     reranker_enabled: bool = False
     pgvector_search_enabled: bool = False
+    # Spec 4.7: durable observability log/trace storage, off by default for
+    # the same reason as the two flags above — a deliberate operator choice,
+    # not an automatic behavior change on deploy.
+    observability_postgres_enabled: bool = False
+    # FR-FV03-043: how long durable observability storage keeps a log
+    # record/trace span before a scheduled sweep deletes it. Not gated
+    # behind observability_postgres_enabled itself — the sweep is a no-op
+    # when there is nothing to prune (the in-memory default already caps
+    # nothing, but pruning it is harmless), so this always has a value.
+    observability_retention_days: int = 30
 
     @property
     def postgresql_configured(self) -> bool:
@@ -120,6 +130,12 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         ),
         reranker_enabled=_flag_enabled(runtime_env.get("CHATBI_RERANKER_ENABLED")),
         pgvector_search_enabled=_flag_enabled(runtime_env.get("CHATBI_PGVECTOR_SEARCH_ENABLED")),
+        observability_postgres_enabled=_flag_enabled(
+            runtime_env.get("CHATBI_OBSERVABILITY_POSTGRES_ENABLED")
+        ),
+        observability_retention_days=_positive_int(
+            runtime_env.get("CHATBI_OBSERVABILITY_RETENTION_DAYS"), 30
+        ),
     )
 
 

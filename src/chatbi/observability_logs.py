@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import StrEnum
 import json
 import re
-from typing import Any, Mapping, cast
+from typing import Any, Mapping, Protocol, cast
 
 from chatbi.core.contracts import utc_now
 
@@ -145,6 +145,32 @@ class LogSanitizer:
         return "[masked]"
 
 
+class ObservabilityLogStore(Protocol):
+    """Spec 4.7: the storage boundary ObservabilityLogger writes through —
+    InMemoryObservabilityLogStore (local runtime, tests) and
+    PostgresObservabilityLogStore (observability_postgres.py) both satisfy
+    this, so ObservabilityLogger does not need to know which one it holds.
+    """
+
+    def add(self, record: ObservabilityLogRecord) -> None:
+        ...
+
+    def list_by_trace_id(self, trace_id: str) -> tuple[ObservabilityLogRecord, ...]:
+        ...
+
+    def list_all(self) -> tuple[ObservabilityLogRecord, ...]:
+        ...
+
+    def prune_older_than(self, cutoff_at: datetime) -> int:
+        """FR-FV03-043: deletes every record recorded strictly before
+        cutoff_at; returns the number removed. Called on a schedule (see
+        api/http.py's retention-sweep lifespan), not from any
+        request-handling path — durable storage otherwise grows without
+        bound."""
+
+        ...
+
+
 class InMemoryObservabilityLogStore:
     """Small append-only log store for local runtime and tests."""
 
@@ -160,20 +186,26 @@ class InMemoryObservabilityLogStore:
     def list_all(self) -> tuple[ObservabilityLogRecord, ...]:
         return tuple(self._records)
 
+    def prune_older_than(self, cutoff_at: datetime) -> int:
+        kept = [record for record in self._records if record.recorded_at >= cutoff_at]
+        removed_count = len(self._records) - len(kept)
+        self._records = kept
+        return removed_count
+
 
 class ObservabilityLogger:
     """Create sanitized observability log records."""
 
     def __init__(
         self,
-        store: InMemoryObservabilityLogStore | None = None,
+        store: ObservabilityLogStore | None = None,
         sanitizer: LogSanitizer | None = None,
     ) -> None:
         self._store = store or InMemoryObservabilityLogStore()
         self._sanitizer = sanitizer or LogSanitizer()
 
     @property
-    def store(self) -> InMemoryObservabilityLogStore:
+    def store(self) -> ObservabilityLogStore:
         return self._store
 
     def record(

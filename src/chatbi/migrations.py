@@ -27,6 +27,7 @@ V2_SCHEMA_NAMES = (
     "rag",
     "analytics",
     "auth",
+    "observability",
 )
 
 V2_SCHEMAS_SQL = "\n".join(
@@ -175,6 +176,42 @@ CREATE INDEX IF NOT EXISTS idx_runtime_agent_traces_query_result_id
     ON runtime.agent_traces(query_result_id);
 CREATE INDEX IF NOT EXISTS idx_runtime_agent_traces_agent_status
     ON runtime.agent_traces(agent_name, status);
+"""
+
+# Spec 4.7: durable backing for ObservabilityLogStore/ObservabilityStore
+# (observability_logs.py / observability.py) — both are in-memory-only by
+# default, so a process restart loses every log record and trace span,
+# which in turn means golden_dataset_mining.py can only ever mine questions
+# asked since the last restart. PostgresObservabilityLogStore/
+# PostgresObservabilityStore (observability_postgres.py) write here.
+OBSERVABILITY_TABLES_SQL = """
+CREATE SCHEMA IF NOT EXISTS observability;
+CREATE TABLE IF NOT EXISTS observability.log_records (
+    log_id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    level TEXT NOT NULL,
+    message TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    service TEXT NOT NULL,
+    event TEXT NOT NULL,
+    request_id TEXT,
+    attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
+    recorded_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_observability_log_records_trace_id
+    ON observability.log_records(trace_id);
+CREATE TABLE IF NOT EXISTS observability.trace_spans (
+    span_id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    span_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    duration_ms INTEGER CHECK (duration_ms >= 0),
+    attributes JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_observability_trace_spans_trace_id
+    ON observability.trace_spans(trace_id);
 """
 
 GOVERNANCE_AUDIT_TABLES_SQL = f"""
@@ -1015,6 +1052,7 @@ BASE_MIGRATION_SQL_STATEMENTS = (
     RUNTIME_QUERY_HISTORY_TABLE_SQL,
     RUNTIME_QUERY_RESULTS_TABLE_SQL,
     RUNTIME_AGENT_TRACES_TABLE_SQL,
+    OBSERVABILITY_TABLES_SQL,
     GOVERNANCE_AUDIT_TABLES_SQL,
     DEMO_COMPLETED_QUERY_SEED_SQL,
 )

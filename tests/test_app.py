@@ -33,6 +33,32 @@ def make_payload_for_user(
     )
 
 
+def test_close_is_a_no_op_when_no_closeable_resources_are_registered() -> None:
+    # The common case every other test in this file exercises — nothing
+    # should raise, and there is nothing to actually close.
+    app = ChatBIApplication()
+
+    app.close()
+
+
+def test_close_calls_every_registered_closeable_resource() -> None:
+    # Code-review follow-up (Spec 4.7): create_app()'s shutdown lifespan
+    # (api/http.py) calls this to release resources _build_default_
+    # chatbi_application() constructed but this application does not
+    # otherwise own the lifecycle of (e.g. the observability ConnectionPool).
+    calls: list[str] = []
+    app = ChatBIApplication(
+        closeable_resources=(
+            lambda: calls.append("first"),
+            lambda: calls.append("second"),
+        )
+    )
+
+    app.close()
+
+    assert calls == ["first", "second"]
+
+
 def test_handle_chat_query_returns_success_envelope() -> None:
     app = ChatBIApplication()
 
@@ -459,6 +485,48 @@ def test_handle_eval_run_computes_retrieval_metrics_against_the_live_knowledge_s
     saved_scores = app.evaluation_repository.scores_by_run_id(eval_run_id)
     assert saved_scores[0].retrieval_hit_at_3 is True
     assert saved_scores[0].retrieval_reciprocal_rank == 1.0
+
+
+def test_mine_golden_dataset_candidates_surfaces_a_real_answered_question() -> None:
+    # Spec 4.6 §3.4 follow-up: a question this process actually answered
+    # with real RAG evidence must show up as a labeling candidate, with
+    # retrieve()'s own top-K shortlist attached, ready for a human reviewer
+    # to confirm before it graduates into golden_dataset/cases.json.
+    knowledge_store = InMemoryKnowledgeStore()
+    knowledge_store.save_document(
+        KnowledgeDocument(
+            source_id="rag_revenue_policy_2026",
+            title="Revenue metric policy and anomaly explanation",
+            doc_type="policy",
+            publish_time=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        )
+    )
+    knowledge_store.save_chunk(
+        DocumentChunk(
+            chunk_id="rag_revenue_policy_2026_chunk_1",
+            source_id="rag_revenue_policy_2026",
+            chunk_index=1,
+            chunk_text="Revenue is calculated from paid orders only.",
+        )
+    )
+    app = ChatBIApplication(orchestrator=SimpleOrchestrator(knowledge_store=knowledge_store))
+
+    app.handle_chat_query(make_payload("Why is revenue calculated from paid orders only?"))
+
+    candidates = app.mine_golden_dataset_candidates()
+
+    assert [candidate.question for candidate in candidates] == [
+        "Why is revenue calculated from paid orders only?"
+    ]
+    assert candidates[0].candidate_chunks[0].chunk_id == "rag_revenue_policy_2026_chunk_1"
+
+
+def test_mine_golden_dataset_candidates_excludes_questions_with_no_rag_evidence() -> None:
+    app = ChatBIApplication()
+
+    app.handle_chat_query(make_payload("Show revenue trend."))
+
+    assert app.mine_golden_dataset_candidates() == ()
 
 
 def test_handle_eval_run_omits_retrieval_metrics_when_no_case_has_expected_chunk_ids() -> None:

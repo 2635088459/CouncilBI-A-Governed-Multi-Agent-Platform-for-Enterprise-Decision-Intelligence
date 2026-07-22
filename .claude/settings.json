@@ -33,7 +33,13 @@
       "Bash(python -m pyright src/chatbi/application/app.py src/chatbi/evaluation_cases.py)",
       "Bash(python -m pytest tests/test_app.py tests/test_evaluation_cases.py tests/test_migrations.py -q)",
       "Bash(python -m pytest tests/test_golden_dataset_cases.py -q)",
-      "Bash(python -m pyright tests/test_golden_dataset_cases.py src/chatbi/evaluation_cases.py src/chatbi/application/app.py src/chatbi/migrations.py tests/test_migrations.py tests/test_app.py)"
+      "Bash(python -m pyright tests/test_golden_dataset_cases.py src/chatbi/evaluation_cases.py src/chatbi/application/app.py src/chatbi/migrations.py tests/test_migrations.py tests/test_app.py)",
+      "Bash(git fetch *)",
+      "Bash(git remote *)",
+      "Bash(python -m pyright src/chatbi/golden_dataset_mining.py src/chatbi/application/app.py)",
+      "Bash(python -m pytest tests/test_golden_dataset_mining.py -q)",
+      "Bash(python -m pyright tests/test_golden_dataset_mining.py)",
+      "Bash(python -m pytest tests/test_app.py -q -k \"mine_golden_dataset\")"
     ]
   }
 }

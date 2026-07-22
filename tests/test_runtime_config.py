@@ -151,6 +151,34 @@ def test_load_runtime_config_reads_pgvector_search_enabled_flag() -> None:
     assert load_runtime_config({"CHATBI_PGVECTOR_SEARCH_ENABLED": "0"}).pgvector_search_enabled is False
 
 
+def test_load_runtime_config_defaults_observability_postgres_to_disabled() -> None:
+    # Spec 4.7: opt-in, off by default — a deliberate operator choice.
+    assert load_runtime_config({}).observability_postgres_enabled is False
+
+
+def test_load_runtime_config_reads_observability_postgres_enabled_flag() -> None:
+    assert (
+        load_runtime_config({"CHATBI_OBSERVABILITY_POSTGRES_ENABLED": "true"}).observability_postgres_enabled
+        is True
+    )
+    assert (
+        load_runtime_config({"CHATBI_OBSERVABILITY_POSTGRES_ENABLED": "0"}).observability_postgres_enabled
+        is False
+    )
+
+
+def test_load_runtime_config_defaults_observability_retention_days_to_30() -> None:
+    assert load_runtime_config({}).observability_retention_days == 30
+
+
+def test_load_runtime_config_reads_observability_retention_days() -> None:
+    assert load_runtime_config({"CHATBI_OBSERVABILITY_RETENTION_DAYS": "7"}).observability_retention_days == 7
+
+
+def test_load_runtime_config_ignores_invalid_observability_retention_days() -> None:
+    assert load_runtime_config({"CHATBI_OBSERVABILITY_RETENTION_DAYS": "-3"}).observability_retention_days == 30
+
+
 def test_runtime_config_treats_blank_values_as_missing() -> None:
     config = load_runtime_config(
         {

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from time import perf_counter
 from statistics import quantiles
-from typing import Any, Mapping, TypeVar
+from typing import Any, Mapping, Protocol, TypeVar
 
 from chatbi.core.contracts import utc_now
 
@@ -132,6 +132,35 @@ class TraceReplay:
         )
 
 
+class ObservabilityStore(Protocol):
+    """Spec 4.7: the storage boundary TraceRecorder writes through —
+    InMemoryObservabilityStore (local runtime, tests) and
+    PostgresObservabilityStore (observability_postgres.py) both satisfy
+    this, so TraceRecorder does not need to know which one it holds.
+    """
+
+    def add_span(self, span: ObservabilitySpan) -> None:
+        ...
+
+    def list_spans(self, trace_id: str) -> tuple[ObservabilitySpan, ...]:
+        ...
+
+    def replay(self, trace_id: str) -> TraceReplay | None:
+        ...
+
+    def list_all(self) -> tuple[ObservabilitySpan, ...]:
+        ...
+
+    def prune_older_than(self, cutoff_at: datetime) -> int:
+        """FR-FV03-043: deletes every span that occurred strictly before
+        cutoff_at; returns the number removed. Called on a schedule (see
+        api/http.py's retention-sweep lifespan), not from any
+        request-handling path — durable storage otherwise grows without
+        bound."""
+
+        ...
+
+
 class InMemoryObservabilityStore:
     """Small synchronous trace store for local runtime and tests."""
 
@@ -153,15 +182,21 @@ class InMemoryObservabilityStore:
     def list_all(self) -> tuple[ObservabilitySpan, ...]:
         return tuple(self._spans)
 
+    def prune_older_than(self, cutoff_at: datetime) -> int:
+        kept = [span for span in self._spans if span.occurred_at >= cutoff_at]
+        removed_count = len(self._spans) - len(kept)
+        self._spans = kept
+        return removed_count
+
 
 class TraceRecorder:
     """Write standard spans with tiny synchronous overhead."""
 
-    def __init__(self, store: InMemoryObservabilityStore | None = None) -> None:
+    def __init__(self, store: ObservabilityStore | None = None) -> None:
         self._store = store or InMemoryObservabilityStore()
 
     @property
-    def store(self) -> InMemoryObservabilityStore:
+    def store(self) -> ObservabilityStore:
         return self._store
 
     def record(
