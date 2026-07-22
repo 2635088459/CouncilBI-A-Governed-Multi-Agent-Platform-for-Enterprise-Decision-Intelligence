@@ -1,4 +1,4 @@
-# Spec FV10.3：文件保留、自动归档与重新上传去重
+1# Spec FV10.3：文件保留、自动归档与重新上传去重
 
 来源设计文档：
 - [10.3 文件保留、自动归档与重新上传去重设计](../../../system_design/final-version/zh-CN/10-followups/03-file-retention-and-archival.zh-CN.md)
