@@ -1,0 +1,18 @@
+1. Cover with asymmetric KPI rail.
+2. System architecture map.
+3. Stable sustained benchmark with metric stack and latency bars.
+4. Overload/rate-limit status-code proof.
+5. Correctness and governance matrix.
+6. Token-efficiency comparison with dominant bar ratio.
+7. Recovery and resource operations slide.
+8. Final talk track / evidence map.
+
+Macro-layout variety:
+- Cover metric rail
+- Left-to-right architecture map
+- Benchmark proof panel
+- Status-code mix chart
+- Dense metric matrix
+- Token comparison chart
+- Timeline plus resource snapshot
+- Closing evidence table

@@ -1,0 +1,41 @@
+Slide size: 1280x720
+
+Background:
+- Warm off-white #F7F2E8 for main slides.
+- Deep ink #17201B for cover and final slides.
+
+Typography:
+- Claims: Georgia, bold, 38-58px.
+- Labels/body: Arial, 14-24px.
+- Monospace-ish technical labels: Arial, 13-16px.
+
+Palette:
+- Ink #17201B for primary text.
+- Paper #F7F2E8 for backgrounds.
+- Green #2F7D5A for success and governed paths.
+- Blue #2D5BFF for cloud/runtime signals.
+- Amber #D88A22 for risk and rate limiting.
+- Red #B9473E for failure/error callouts.
+- Muted gray #7A8178 for source notes.
+
+Chart grammar:
+- Direct labels; no heavy legends.
+- Use horizontal bars and large deltas for executive readability.
+- Source labels live in the lower-left footer.
+
+Diagram grammar:
+- Left-to-right flow.
+- Governance controls shown as vertical gates.
+- LLM is only reached after bounded context preparation.
+
+Container grammar:
+- Use hairline rules and rectangular panels only when grouping proof.
+- Avoid repeated card-grid cadence.
+
+Footer grammar:
+- Small gray source note, slide number bottom-right.
+
+Banned motifs:
+- No fake logos.
+- No decorative blobs or gradient orbs.
+- No vague "AI layer" boxes without technical labels.

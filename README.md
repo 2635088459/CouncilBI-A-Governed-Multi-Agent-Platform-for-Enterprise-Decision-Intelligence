@@ -4,6 +4,8 @@
 
 Full write-ups: [English deep dive](docs/readme/README.en.md) · [中文完整版](docs/readme/README.zh-CN.md) · [Academic report (LaTeX/PDF)](report/InsightOps_AI_Report.tex)
 
+Current demo links: [GKE staging app](http://136.69.23.39) · [Evaluation summary](dist/report/report-evaluation-summary.md) · [Token savings report](dist/report/token-savings-report.md) · [Demo report deck](dist/report/chatbi-demo-report.pptx)
+
 ## Who It's For
 
 | Persona | Gets |
@@ -102,6 +104,22 @@ for why) — they do not require a real OpenAI key or network access.
 
 ## Links
 
+### Live Demo and Report Entry Points
+
+| Artifact | Link |
+|---|---|
+| Current GKE staging app | [http://136.69.23.39](http://136.69.23.39) |
+| GKE chat API endpoint | [http://136.69.23.39/api/v2/chat/query](http://136.69.23.39/api/v2/chat/query) |
+| Demo/evaluation summary | [dist/report/report-evaluation-summary.md](dist/report/report-evaluation-summary.md) |
+| Demo report PPTX | [dist/report/chatbi-demo-report.pptx](dist/report/chatbi-demo-report.pptx) |
+| Token savings report | [dist/report/token-savings-report.md](dist/report/token-savings-report.md) |
+| Stable sustained benchmark | [dist/report/gke-sustained-stable-benchmark.md](dist/report/gke-sustained-stable-benchmark.md) |
+| Overload/rate-limit stress benchmark | [dist/report/gke-sustained-rate-limit-stress.md](dist/report/gke-sustained-rate-limit-stress.md) |
+| Extended correctness benchmark | [dist/report/gke-extended-correctness.md](dist/report/gke-extended-correctness.md) |
+| Pod recovery drill | [dist/report/gke-pod-recovery-drill.md](dist/report/gke-pod-recovery-drill.md) |
+
+> Note: the GKE URL is a staging endpoint and may change if the LoadBalancer or cluster is recreated.
+
 ### Specs and System Design
 
 | Artifact | Link |
@@ -141,6 +159,12 @@ for why) — they do not require a real OpenAI key or network access.
 |---|---|
 | Academic report (LaTeX source, IEEEtran format) | [report/InsightOps_AI_Report.tex](report/InsightOps_AI_Report.tex) |
 | Compiled report PDF | `report/InsightOps_AI_Report.pdf` (build with `tectonic report/InsightOps_AI_Report.tex`) |
+| Demo/evaluation summary (GKE metrics, correctness, recovery, token efficiency) | [dist/report/report-evaluation-summary.md](dist/report/report-evaluation-summary.md) |
+| Demo report deck (PowerPoint) | [dist/report/chatbi-demo-report.pptx](dist/report/chatbi-demo-report.pptx) |
+| Token savings report (complex executive-analysis cases) | [dist/report/token-savings-report.md](dist/report/token-savings-report.md) |
+| Stable sustained GKE benchmark | [dist/report/gke-sustained-stable-benchmark.md](dist/report/gke-sustained-stable-benchmark.md) |
+| Overload/rate-limit GKE stress benchmark | [dist/report/gke-sustained-rate-limit-stress.md](dist/report/gke-sustained-rate-limit-stress.md) |
+| GKE extended correctness benchmark | [dist/report/gke-extended-correctness.md](dist/report/gke-extended-correctness.md) |
 | Local baseline benchmark generator (accuracy, guardrail, concurrency, hallucination) | `scripts/generate_report_metrics.py` → `dist/report/report-metrics.md` |
 | GKE staging benchmark generators (load, concurrency sweep, repeated-run stability, golden/extended correctness, pod-recovery drill) | `scripts/generate_gke_*.py`, `scripts/summarize_gke_*.py` — see [How to Test](#how-to-test) |
 | Cloud deployment runbook (how the staging benchmarks above were produced) | [docs/deployment/cloud-kubernetes-runbook.md](docs/deployment/cloud-kubernetes-runbook.md) |

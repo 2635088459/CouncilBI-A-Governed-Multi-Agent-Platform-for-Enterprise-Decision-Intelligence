@@ -1,0 +1,38 @@
+Thesis:
+InsightOps AI proves a governed multi-agent ChatBI platform can answer enterprise questions with measured cloud reliability, safety controls, and major token-efficiency gains from SQL/RAG context reduction.
+
+Audience:
+Course/demo evaluators, engineering reviewers, and product/platform stakeholders.
+
+One-line arc:
+Show the system, prove it runs on GKE, quantify quality/reliability/cost controls, then close with how to present the demo honestly.
+
+Slide list:
+1. The platform is no longer just local code; it has a measured GKE staging proof.
+   Proof: KPI rail with live URL, correctness, latency, token reduction.
+   Source: report-evaluation-summary.md
+2. The architecture limits LLM exposure by routing through governed agents.
+   Proof: editable workflow map.
+   Source: README and k8s/runbook.
+3. Stable load stayed clean for a full 10-minute window.
+   Proof: sustained benchmark bar/KPI layout.
+   Source: gke-sustained-stable-benchmark.md
+4. Overload fails closed through rate limiting.
+   Proof: status-code mix comparing accepted vs rate-limited.
+   Source: gke-sustained-rate-limit-stress.md
+5. Correctness and governance are measured, not only asserted.
+   Proof: correctness/guardrail metric matrix.
+   Source: gke-extended-correctness.md and gke-staging-metrics.md
+6. SQL and RAG turn long-context analysis into small grounded prompts.
+   Proof: token comparison chart, optimized vs naive.
+   Source: token-savings-report.md
+7. Recovery and resources show the deployment has operational evidence.
+   Proof: recovery timeline and resource snapshot.
+   Source: gke-pod-recovery-drill.md and gke-resource-utilization-after-stable-load.md
+8. The demo story is defensible if the measurement boundary is explicit.
+   Proof: final talk track table.
+   Source: report-evaluation-summary.md
+
+Omission notes:
+- Do not claim real OpenAI billing tokens because staging used mock provider.
+- Do not claim production SLOs; label results as GKE Autopilot staging.

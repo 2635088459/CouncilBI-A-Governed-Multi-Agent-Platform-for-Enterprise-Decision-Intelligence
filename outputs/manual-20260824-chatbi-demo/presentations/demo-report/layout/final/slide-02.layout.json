@@ -1,0 +1,1354 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/z9kopp",
+    "id": "z9kopp",
+    "slide": 2,
+    "layoutId": "24bf8da2-9936-4ac6-8cd5-e155124f48d0",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "ecd25123-ef34-44bf-b602-75bebc4b01c1",
+    "masterLayoutName": "Master",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Arial",
+      "Georgia"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "24bf8da2-9936-4ac6-8cd5-e155124f48d0",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "ecd25123-ef34-44bf-b602-75bebc4b01c1",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "ecd25123-ef34-44bf-b602-75bebc4b01c1",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/val87ed8",
+      "id": "1",
+      "bbox": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#F7F2E8"
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kre1w7mp",
+      "id": "2",
+      "bbox": [
+        64,
+        38,
+        240,
+        26
+      ],
+      "geometry": "rect",
+      "text": "ARCHITECTURE",
+      "textPreview": "ARCHITECTURE",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "ARCHITECTURE"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "ARCHITECTURE",
+          "runs": [
+            {
+              "index": 1,
+              "text": "ARCHITECTURE",
+              "fontSize": 13,
+              "typeface": "Arial",
+              "color": "#2F7D5A",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F7F2E8"
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/dcbulwva",
+      "id": "3",
+      "bbox": [
+        58,
+        76,
+        780,
+        92
+      ],
+      "geometry": "rect",
+      "text": "The LLM sits behind governed routing, bounded data, and audit gates.",
+      "textPreview": "The LLM sits behind governed routing, bounded data, and audit gates.",
+      "resolvedFontSize": 35,
+      "resolvedTextStyle": {
+        "fontSize": 40,
+        "typeface": "Georgia",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "The LLM sits behind governed routing,"
+          },
+          {
+            "index": 2,
+            "text": "bounded data, and audit gates."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "The LLM sits behind governed routing, bounded data, and audit gates.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "The LLM sits behind governed routing, bounded data, and audit gates.",
+              "fontSize": 40,
+              "typeface": "Georgia",
+              "color": "#17201B",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F7F2E8"
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2x4nap4r",
+      "id": "4",
+      "bbox": [
+        64,
+        245,
+        150,
+        116
+      ],
+      "geometry": "rect",
+      "fillColor": "#FFFFFF"
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vixczed8",
+      "id": "5",
+      "bbox": [
+        78,
+        257,
+        122,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Business question",
+      "textPreview": "Business question",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Business"
+          },
+          {
+            "index": 2,
+            "text": "question"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Business question",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Business question",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#17201B",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF"
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/k3q5o7qp",
+      "id": "6",
+      "bbox": [
+        78,
+        287,
+        122,
+        64
+      ],
+      "geometry": "rect",
+      "text": "Natural-language BI request with user, role, org, and session context.",
+      "textPreview": "Natural-language BI request with user, role, org, and session context.",
+      "resolvedFontSize": 11.67,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Natural-language BI"
+          },
+          {
+            "index": 2,
+            "text": "request with user,"
+          },
+          {
+            "index": 3,
+            "text": "role, org, and"
+          },
+          {
+            "index": 4,
+            "text": "session context."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Natural-language BI request with user, role, org, and session context.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Natural-language BI request with user, role, org, and session context.",
+              "fontSize": 13,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF"
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/donyd0z6",
+      "id": "7",
+      "bbox": [
+        268,
+        245,
+        150,
+        116
+      ],
+      "geometry": "rect",
+      "fillColor": "#DDE6FF"
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/29gr2p8n",
+      "id": "8",
+      "bbox": [
+        282,
+        257,
+        122,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Orchestrator",
+      "textPreview": "Orchestrator",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Orchestrator"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Orchestrator",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Orchestrator",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#17201B",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#DDE6FF"
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vu9knih4",
+      "id": "9",
+      "bbox": [
+        282,
+        287,
+        122,
+        64
+      ],
+      "geometry": "rect",
+      "text": "Classifies intent and builds an agent plan instead of sending raw enterprise context.",
+      "textPreview": "Classifies intent and builds an agent plan instead of sending raw enterprise context.",
+      "resolvedFontSize": 11,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 5,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Classifies intent and"
+          },
+          {
+            "index": 2,
+            "text": "builds an agent plan"
+          },
+          {
+            "index": 3,
+            "text": "instead of sending"
+          },
+          {
+            "index": 4,
+            "text": "raw enterprise"
+          },
+          {
+            "index": 5,
+            "text": "context."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Classifies intent and builds an agent plan instead of sending raw enterprise context.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Classifies intent and builds an agent plan instead of sending raw enterprise context.",
+              "fontSize": 13,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#DDE6FF"
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3ylc7u54",
+      "id": "10",
+      "bbox": [
+        472,
+        245,
+        160,
+        116
+      ],
+      "geometry": "rect",
+      "fillColor": "#F4E3C8"
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/adsji5sn",
+      "id": "11",
+      "bbox": [
+        486,
+        257,
+        132,
+        26
+      ],
+      "geometry": "rect",
+      "text": "SQL guardrail",
+      "textPreview": "SQL guardrail",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "SQL guardrail"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "SQL guardrail",
+          "runs": [
+            {
+              "index": 1,
+              "text": "SQL guardrail",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#17201B",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F4E3C8"
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/h4byhgn2",
+      "id": "12",
+      "bbox": [
+        486,
+        287,
+        132,
+        64
+      ],
+      "geometry": "rect",
+      "text": "Read-only validation, table allow-list, row limit, timeout policy, audit record.",
+      "textPreview": "Read-only validation, table allow-list, row limit, timeout policy, audit record.",
+      "resolvedFontSize": 11.67,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Read-only validation,"
+          },
+          {
+            "index": 2,
+            "text": "table allow-list, row"
+          },
+          {
+            "index": 3,
+            "text": "limit, timeout policy,"
+          },
+          {
+            "index": 4,
+            "text": "audit record."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Read-only validation, table allow-list, row limit, timeout policy, audit record.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Read-only validation, table allow-list, row limit, timeout policy, audit record.",
+              "fontSize": 13,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F4E3C8"
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/sji5snel",
+      "id": "13",
+      "bbox": [
+        686,
+        245,
+        150,
+        116
+      ],
+      "geometry": "rect",
+      "fillColor": "#DCEBDF"
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3m94fu18",
+      "id": "14",
+      "bbox": [
+        700,
+        257,
+        122,
+        26
+      ],
+      "geometry": "rect",
+      "text": "RAG evidence",
+      "textPreview": "RAG evidence",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "RAG"
+          },
+          {
+            "index": 2,
+            "text": "evidence"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "RAG evidence",
+          "runs": [
+            {
+              "index": 1,
+              "text": "RAG evidence",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#17201B",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#DCEBDF"
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/a5gbq1or",
+      "id": "15",
+      "bbox": [
+        700,
+        287,
+        122,
+        64
+      ],
+      "geometry": "rect",
+      "text": "BM25/embedding retrieval selects only top snippets and citations.",
+      "textPreview": "BM25/embedding retrieval selects only top snippets and citations.",
+      "resolvedFontSize": 11.67,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "BM25/embedding"
+          },
+          {
+            "index": 2,
+            "text": "retrieval selects only"
+          },
+          {
+            "index": 3,
+            "text": "top snippets and"
+          },
+          {
+            "index": 4,
+            "text": "citations."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "BM25/embedding retrieval selects only top snippets and citations.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "BM25/embedding retrieval selects only top snippets and citations.",
+              "fontSize": 13,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#DCEBDF"
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/lszqtcj6",
+      "id": "16",
+      "bbox": [
+        890,
+        245,
+        160,
+        116
+      ],
+      "geometry": "rect",
+      "fillColor": "#FFFFFF"
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/s72x4nap",
+      "id": "17",
+      "bbox": [
+        904,
+        257,
+        132,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Answer verifier",
+      "textPreview": "Answer verifier",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Answer"
+          },
+          {
+            "index": 2,
+            "text": "verifier"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Answer verifier",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Answer verifier",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#17201B",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF"
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/zidonyd0",
+      "id": "18",
+      "bbox": [
+        904,
+        287,
+        132,
+        64
+      ],
+      "geometry": "rect",
+      "text": "Checks grounded answer, traces every step, returns warnings when needed.",
+      "textPreview": "Checks grounded answer, traces every step, returns warnings when needed.",
+      "resolvedFontSize": 11.67,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Checks grounded"
+          },
+          {
+            "index": 2,
+            "text": "answer, traces every"
+          },
+          {
+            "index": 3,
+            "text": "step, returns warnings"
+          },
+          {
+            "index": 4,
+            "text": "when needed."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Checks grounded answer, traces every step, returns warnings when needed.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Checks grounded answer, traces every step, returns warnings when needed.",
+              "fontSize": 13,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF"
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/a1gvy90j",
+      "id": "19",
+      "bbox": [
+        1104,
+        245,
+        120,
+        116
+      ],
+      "geometry": "rect",
+      "fillColor": "#DDE6FF"
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ylc7u54z",
+      "id": "20",
+      "bbox": [
+        1118,
+        257,
+        92,
+        26
+      ],
+      "geometry": "rect",
+      "text": "User answer",
+      "textPreview": "User answer",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "User"
+          },
+          {
+            "index": 2,
+            "text": "answer"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "User answer",
+          "runs": [
+            {
+              "index": 1,
+              "text": "User answer",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#17201B",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#DDE6FF"
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/r65wjudg",
+      "id": "21",
+      "bbox": [
+        1118,
+        287,
+        92,
+        64
+      ],
+      "geometry": "rect",
+      "text": "Chart/table/text response with trace_id for admin observability.",
+      "textPreview": "Chart/table/text response with trace_id for admin observability.",
+      "resolvedFontSize": 9.99,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Chart/table/text"
+          },
+          {
+            "index": 2,
+            "text": "response with"
+          },
+          {
+            "index": 3,
+            "text": "trace_id for admin"
+          },
+          {
+            "index": 4,
+            "text": "observability."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Chart/table/text response with trace_id for admin observability.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Chart/table/text response with trace_id for admin observability.",
+              "fontSize": 13,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#DDE6FF"
+    },
+    {
+      "order": 22,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/gr2p8nqx",
+      "id": "22",
+      "bbox": [
+        214,
+        303,
+        54,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 23,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/9cvixcze",
+      "id": "23",
+      "bbox": [
+        264,
+        298,
+        12,
+        12
+      ],
+      "geometry": "triangle",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 24,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/yxobm58z",
+      "id": "24",
+      "bbox": [
+        418,
+        303,
+        54,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 25,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/nih4byhg",
+      "id": "25",
+      "bbox": [
+        468,
+        298,
+        12,
+        12
+      ],
+      "geometry": "triangle",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 26,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/g3ex0nux",
+      "id": "26",
+      "bbox": [
+        632,
+        303,
+        54,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 27,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/5o7qpg3e",
+      "id": "27",
+      "bbox": [
+        682,
+        298,
+        12,
+        12
+      ],
+      "geometry": "triangle",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 28,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/y1kre1w7",
+      "id": "28",
+      "bbox": [
+        836,
+        303,
+        54,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 29,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/rmhk3q5o",
+      "id": "29",
+      "bbox": [
+        886,
+        298,
+        12,
+        12
+      ],
+      "geometry": "triangle",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 30,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/dsji5sne",
+      "id": "30",
+      "bbox": [
+        1050,
+        303,
+        54,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 31,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/o7qpg3ex",
+      "id": "31",
+      "bbox": [
+        1100,
+        298,
+        12,
+        12
+      ],
+      "geometry": "triangle",
+      "fillColor": "#7A8178"
+    },
+    {
+      "order": 32,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vmtwra5g",
+      "id": "32",
+      "bbox": [
+        64,
+        440,
+        1160,
+        1.2
+      ],
+      "geometry": "rect",
+      "fillColor": "#C9C2B6"
+    },
+    {
+      "order": 33,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/61032lsz",
+      "id": "33",
+      "bbox": [
+        68,
+        468,
+        230,
+        30
+      ],
+      "geometry": "rect",
+      "text": "What this proves",
+      "textPreview": "What this proves",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "What this proves"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "What this proves",
+          "runs": [
+            {
+              "index": 1,
+              "text": "What this proves",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#17201B",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F7F2E8"
+    },
+    {
+      "order": 34,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/d4vmtwra",
+      "id": "34",
+      "bbox": [
+        300,
+        462,
+        820,
+        66
+      ],
+      "geometry": "rect",
+      "text": "The architecture is designed to reduce risk and token usage before the model is called: SQL handles structured aggregation; RAG handles targeted evidence; guardrails block unsafe execution.",
+      "textPreview": "The architecture is designed to reduce risk and token usage before the model is called: SQL handles structured aggregation; RAG handles t...",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 3,
+        "lines": [
+          {
+            "index": 1,
+            "text": "The architecture is designed to reduce risk and token usage before the model is called:"
+          },
+          {
+            "index": 2,
+            "text": "SQL handles structured aggregation; RAG handles targeted evidence; guardrails block"
+          },
+          {
+            "index": 3,
+            "text": "unsafe execution."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "The architecture is designed to reduce risk and token usage before the model is called: SQL handles structured aggregation; RAG handles targeted evidence; guardrails block unsafe execution.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "The architecture is designed to reduce risk and token usage before the model is called: SQL handles structured aggregation; RAG handles targeted evidence; guardrails block unsafe execution.",
+              "fontSize": 20,
+              "typeface": "Arial",
+              "color": "#17201B"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F7F2E8"
+    },
+    {
+      "order": 35,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/oj2t83it",
+      "id": "35",
+      "bbox": [
+        300,
+        548,
+        800,
+        40
+      ],
+      "geometry": "rect",
+      "text": "Secret handling: OpenAI API key is injected into backend/worker by Kubernetes Secret, not committed into YAML.",
+      "textPreview": "Secret handling: OpenAI API key is injected into backend/worker by Kubernetes Secret, not committed into YAML.",
+      "resolvedFontSize": 16,
+      "resolvedTextStyle": {
+        "fontSize": 16,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Secret handling: OpenAI API key is injected into backend/worker by Kubernetes Secret, not committed into"
+          },
+          {
+            "index": 2,
+            "text": "YAML."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Secret handling: OpenAI API key is injected into backend/worker by Kubernetes Secret, not committed into YAML.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Secret handling: OpenAI API key is injected into backend/worker by Kubernetes Secret, not committed into YAML.",
+              "fontSize": 16,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F7F2E8"
+    },
+    {
+      "order": 36,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vy90je9c",
+      "id": "36",
+      "bbox": [
+        58,
+        676,
+        860,
+        24
+      ],
+      "geometry": "rect",
+      "text": "Sources: README.md, k8s/chatbi-runtime.yaml, docs/deployment/cloud-kubernetes-runbook.md",
+      "textPreview": "Sources: README.md, k8s/chatbi-runtime.yaml, docs/deployment/cloud-kubernetes-runbook.md",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Sources: README.md, k8s/chatbi-runtime.yaml, docs/deployment/cloud-kubernetes-runbook.md"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Sources: README.md, k8s/chatbi-runtime.yaml, docs/deployment/cloud-kubernetes-runbook.md",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Sources: README.md, k8s/chatbi-runtime.yaml, docs/deployment/cloud-kubernetes-runbook.md",
+              "fontSize": 12,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F7F2E8"
+    },
+    {
+      "order": 37,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/6dcbulwv",
+      "id": "37",
+      "bbox": [
+        1190,
+        676,
+        42,
+        24
+      ],
+      "geometry": "rect",
+      "text": "02",
+      "textPreview": "02",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Arial",
+        "alignment": "right"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "02"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "02",
+          "runs": [
+            {
+              "index": 1,
+              "text": "02",
+              "fontSize": 12,
+              "typeface": "Arial",
+              "color": "#7A8178"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F7F2E8"
+    }
+  ],
+  "composeRuns": []
+}

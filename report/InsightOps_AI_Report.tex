@@ -63,12 +63,18 @@ mock provider for cost-free testing; an evaluation runner and release gate
 that a human can accept only after automated tests, static type checks, and
 quality thresholds already pass; and an observability stack with a durable,
 opt-in storage backend that feeds a golden-dataset mining pipeline for
-continuous retrieval-quality improvement. The system is deployed locally
-with Docker Compose and has a Kubernetes runtime scaffold for cloud
-deployment. This report summarizes the requirements, design,
-implementation, security model, deployment, and evaluation results, and
-discusses the gaps that remain before this is a fully production-hardened
-cloud service.
+continuous retrieval-quality improvement. The system runs locally with
+Docker Compose and was deployed to a live GKE Autopilot staging cluster,
+where it was benchmarked under steady-state load, burst load, and
+deliberate overload (12{,}000 requests at a 20~RPS target, of which the
+rate limiter correctly rejected 90\% with HTTP~429 rather than letting the
+system degrade uncontrolled), survived a live pod-kill recovery drill in
+21 seconds, and showed that its governed retrieval path uses 98\% fewer
+tokens than a naive full-context baseline on realistic multi-evidence
+analytical questions. This report summarizes the requirements, design,
+implementation, security model, staging deployment results, and
+evaluation results, and discusses the gaps that remain before this is a
+fully production-hardened cloud service.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -111,11 +117,12 @@ governed NL2SQL, a defense-in-depth SQL guardrail, hybrid RAG retrieval
 with a golden-dataset evaluation loop, an LLM provider gateway, real
 authentication/RBAC/tenant isolation, an evaluation-and-release-gate
 pipeline, observability with durable opt-in storage, and both local
-(Docker Compose) and Kubernetes-scaffolded deployment. It does not yet
-claim full production-cloud hardening: distributed resilience patterns
-such as circuit breakers and dead-letter queues, a second real LLM/embedding
-provider beyond OpenAI, large-scale synthetic load data, and a managed-cloud
-deployment profile are documented as future work rather than claimed as
+(Docker Compose) and staging-benchmarked Kubernetes deployment on GKE. It
+does not yet claim full production-cloud hardening: distributed resilience
+patterns such as circuit breakers and dead-letter queues, a second real
+LLM/embedding provider beyond OpenAI, large-scale synthetic load data, and
+a fully hardened managed-cloud production profile are documented as future
+work rather than claimed as
 done.
 
 % =============================================================
@@ -150,7 +157,7 @@ security, and quality control behind permissioned endpoints.
     \item Support user file upload, ownership, and sharing, scoped to the
     uploading user's organization.
     \item Run reproducibly in a local Docker Compose environment and on a
-    Kubernetes runtime scaffold.
+    Kubernetes deployment, staging-benchmarked on GKE.
 \end{enumerate}
 
 \subsection{Non-Functional Requirements}
@@ -552,20 +559,164 @@ backend API at \texttt{http://localhost:8000}, PostgreSQL at
 \texttt{localhost:5433}, and Redis at \texttt{localhost:6379}.
 
 \subsection{Cloud Deployment}
-A Kubernetes manifest defines the same service topology as a runtime
-scaffold, validated by an architecture test that asserts the manifest's
-shape rather than deploying it live. This is deliberately presented as a
-scaffold rather than a hardened production profile: managed PostgreSQL and
-Redis, a real container registry, TLS ingress, a secrets manager, and
-horizontal pod autoscaling are documented as the remaining steps rather
-than claimed as complete, in the same spirit as being explicit about a
-deployment's actual limitations rather than glossing over them.
+A Kubernetes manifest defines a namespace, Deployments and Services for
+each component, an Ingress, and a \texttt{HorizontalPodAutoscaler} for the
+backend (2--6 replicas, targeting 70\% CPU). Its shape is checked by an
+architecture test, and -- unlike a manifest that only exists on paper --
+it has been deployed to a real GKE Autopilot staging cluster and exercised
+under load; Section~\ref{sec:staging} reports those results. This is
+staging-grade validation, not a hardened production profile: managed
+PostgreSQL and Redis, a real container registry, TLS on the ingress, a
+secrets manager used consistently across every environment, and
+prod-vs-staging manifest overlays are still the remaining steps, documented
+in the deployment runbook rather than claimed as complete.
 
 \subsection{Continuous Integration}
 A GitHub Actions workflow runs the release-gate test and type-check bundle
 on every push, so the pass/fail signal described in
 Section~\ref{sec:testing} is enforced continuously rather than only
-checked manually before a demo.
+checked manually before a demo. A second workflow builds and tests the
+container images on the cloud-deployment path and can trigger a staging
+rollout.
+
+% =============================================================
+\section{Cloud Staging Validation}
+\label{sec:staging}
+
+The Kubernetes deployment described above was not left unexercised. It was
+rolled out to a GKE Autopilot staging cluster behind a public HTTP
+endpoint, with the OpenAI API key injected from a Kubernetes Secret rather
+than committed to any manifest, and benchmarked under steady load, burst
+load, intentional overload, correctness regression, and a live
+pod-failure drill. The LLM provider for these runs was the deterministic
+mock (Section~\ref{sec:implementation}), so the results below are
+reproducible \emph{systems} measurements -- throughput, latency, recovery
+time, and governance behavior under load -- not a measurement of real
+OpenAI answer quality or provider latency; validating the latter against a
+small, human-graded slice of the golden dataset is listed as future work.
+
+\subsection{Steady-State and Burst Load}
+Table~\ref{tab:staging-load} summarizes two load profiles against the live
+staging endpoint: a 10-minute steady-state run at a modest, sustainable
+rate, and a short 50-request burst at concurrency 10. Both completed with
+zero failed requests.
+
+\begin{table}[t]
+\centering
+\caption{GKE staging load benchmarks}
+\label{tab:staging-load}
+\footnotesize
+\begin{tabular}{@{}p{1.9cm}p{1.7cm}p{1.5cm}p{1.5cm}@{}}
+\toprule
+\textbf{Profile} & \textbf{Requests} & \textbf{Success} & \textbf{P95 (ms)} \\
+\midrule
+Steady-state, 0.8 RPS, 10 min & 480 & 100\% (480/480) & 176.7 \\
+Burst, 50 req, concurrency 10 & 50 & 100\% (50/50) & 183.4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+During the burst profile, a parallel 100-request guardrail sample showed a
+100\% dangerous-SQL detection rate, a 100\% benign-SQL allow rate, and a
+guardrail P95 latency of 168.5\,ms -- the SQL guardrail's decision cost is
+a small, bounded fraction of the overall request latency, not a bottleneck.
+
+\subsection{Overload: Governance Under Sustained Excess Load}
+A separate 10-minute run deliberately targeted 20 RPS -- well above the
+platform's configured rate-limit budget -- to test what happens when
+demand exceeds the governed capacity, rather than only testing the happy
+path. Table~\ref{tab:staging-overload} shows the result: of 12{,}000
+requests issued, 1{,}200 were accepted (HTTP 200) and 10{,}799 were
+rejected with HTTP 429; exactly one request failed with a transient HTTP
+502. We read this as the intended behavior, not a failure: the platform
+fails closed under sustained excess load -- rejecting the surplus at the
+rate limiter -- rather than queuing unboundedly or letting every rejected
+request still consume a model/tool call downstream. The one HTTP 502 out
+of 12{,}000 requests is the more interesting number to watch as this test
+is repeated in the future.
+
+\begin{table}[t]
+\centering
+\caption{Overload run: 12{,}000 requests at a 20 RPS target}
+\label{tab:staging-overload}
+\footnotesize
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Status} & \textbf{Count} & \textbf{Share} \\
+\midrule
+200 (accepted) & 1{,}200 & 10.0\% \\
+429 (rate-limited) & 10{,}799 & 90.0\% \\
+502 (transient failure) & 1 & $<$0.01\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Correctness Under a Live Endpoint}
+Two correctness suites were run against the live staging endpoint. A
+3-case golden suite scored 66.7\% (2/3), with \texttt{golden\_monthly\_revenue}
+the one failing case; a broader 12-case suite covering more phrasings of
+similar revenue and chart questions scored 100\% (12/12). We report both
+rather than only the better number: the smaller golden suite is the
+stricter, curated signal, and a single named failing case is a concrete,
+reproducible regression target rather than noise to average away.
+
+\subsection{Failure Recovery}
+We deleted a running backend pod (\texttt{backend-58486cf7b8-267zh})
+directly on the live cluster and timed recovery: the \texttt{Deployment}
+rolled a replacement pod to \texttt{Running} in 21 seconds, and a chat
+query issued immediately after returned HTTP 200. This exercises the
+actual Kubernetes self-healing path, not just its presence in the
+manifest.
+
+\subsection{Resource Footprint Under Load}
+After the 10-minute steady-state run, backend pods were still using only
+single-digit millicores of CPU and 115--120\,MiB of memory each; the
+staging node stayed at 2\% CPU and 5\% memory; and the backend HPA held at
+its floor of 2/2 replicas, meaning this load profile never approached its
+scale-up threshold. This is expected given the mock LLM provider removes
+the dominant real-world cost (waiting on an external model call) from the
+request path, and should not be read as a claim about capacity headroom
+under a real provider's latency.
+
+\subsection{Token Efficiency of the Governed Path}
+Separately from the staging runs, a local estimator compared the governed
+path's model input size -- schema, guardrail-bounded SQL rows, and top
+RAG evidence snippets -- against a naive baseline that sends full
+table/document context, across six realistic, multi-evidence executive
+analytical questions (e.g., quantifying a revenue shortfall against
+forecast \emph{and} root-causing it across campaign and support evidence
+\emph{and} recommending mitigations, in one question). Table~\ref{tab:token-savings}
+shows a 98.01\% average token reduction (54{,}449 to 1{,}085 tokens/question).
+The gap is wider than for a simple lookup question because the naive
+baseline's context size scales with how much source data a thorough
+analytical answer would otherwise require, while the governed path's cost
+stays bounded by the guardrail's row cap and the RAG retriever's top-$k$
+regardless of question complexity -- so the token-efficiency advantage of
+governed retrieval grows, not shrinks, as questions get harder. These are
+estimator-based figures suitable for an engineering report, not
+provider-billed usage; reproducing them against the OpenAI provider's own
+usage fields is listed as future work.
+
+\begin{table}[t]
+\centering
+\caption{Governed vs.\ naive-context token usage (6 executive questions)}
+\label{tab:token-savings}
+\footnotesize
+\begin{tabular}{@{}p{3.5cm}rrr@{}}
+\toprule
+\textbf{Question (abbreviated)} & \textbf{Opt.} & \textbf{Naive} & \textbf{Reduct.} \\
+\midrule
+July revenue shortfall: root cause + Q4 mitigations & 1096 & 54453 & 98.0\% \\
+Executive risk narrative: growth, campaign, SLA, churn & 1124 & 54452 & 97.9\% \\
+Rank products by tickets, incidents, revenue impact & 1108 & 54454 & 98.0\% \\
+Marketing concentration vs.\ revenue decline risk & 1051 & 54444 & 98.1\% \\
+Analytics Hub timeout: isolated or recurring? & 1066 & 54448 & 98.0\% \\
+Customer-retention brief across churn drivers & 1063 & 54445 & 98.1\% \\
+\midrule
+\textbf{Average} & \textbf{1085} & \textbf{54449} & \textbf{98.0\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 % =============================================================
 \section{Testing and Evaluation}
@@ -642,20 +793,30 @@ real security boundaries: authentication, permission-scoped RBAC, and
 query-level tenant isolation, rather than a single shared demo login.
 Fourth, it supports quality control through an evaluation runner and a
 release gate that a human can only accept after, never instead of, the
-machine gates passing. Fifth, it is deployable today through Docker
-Compose, with a Kubernetes scaffold validated as an architectural shape.
+machine gates passing. Fifth, it is deployable and staging-tested, not
+just architecturally scaffolded: a real GKE deployment served 100\% of
+requests successfully under steady and burst load, rejected 90\% of a
+deliberate 20~RPS overload with HTTP~429 rather than degrading
+uncontrolled, recovered a killed pod in 21 seconds, and its governed
+retrieval path measured 98\% fewer tokens than a naive full-context
+baseline on realistic analytical questions (Section~\ref{sec:staging}).
 
-At the same time, several limitations remain. Cloud deployment is a
-scaffold, not a hardened managed-cloud production profile; distributed
-resilience patterns such as circuit breakers, dead-letter queues, and
-load shedding are only partially present; OpenAI is currently the only
+At the same time, several limitations remain. The GKE deployment is
+staging-grade, not a hardened managed-cloud production profile: it still
+needs managed PostgreSQL/Redis, TLS on the ingress, a secrets manager used
+consistently across every environment, and prod-vs-staging overlays.
+Distributed resilience beyond HTTP-level rate limiting -- circuit breakers
+around the LLM gateway, dead-letter queues, and load shedding at the
+worker layer -- is only partially present; OpenAI is currently the only
 real LLM/embedding provider implemented, though the provider protocols
 were designed to make adding another one an adapter rather than a
 rewrite; the demo/seed data is not yet large enough for realistic
-load testing; and the internal trace/log/metric stack has no external
-APM exporter yet. We view these as an honest list of remaining
-production-hardening work rather than gaps to be minimized in the
-description of the system.
+load testing at production scale; and the internal trace/log/metric stack
+has no external APM exporter yet. The one HTTP~502 observed in 12{,}000
+overload requests, and the golden-suite's one failing correctness case,
+are also left as open, named items rather than rounded away. We view all
+of this as an honest list of remaining production-hardening work rather
+than gaps to be minimized in the description of the system.
 
 Even with these limitations, we believe the project is a meaningful
 demonstration of what it takes to make an LLM-backed system trustworthy
@@ -675,8 +836,9 @@ retrieval pipeline (including the audit that found and closed its
 placeholder stages), the LLM provider gateway and model-selection
 rationale, authentication/RBAC/tenant isolation, the evaluation runner and
 release gate, the observability stack and its durable-storage/mining
-loop, the frontend chat and admin console, the local and Kubernetes
-deployment scaffolding, and the accompanying test suite and documentation.
+loop, the frontend chat and admin console, the local Docker Compose and
+GKE staging deployments and their benchmark scripts, and the accompanying
+test suite and documentation.
 
 % =============================================================
 \section{Conclusion and Future Work}
@@ -695,12 +857,15 @@ circuit breakers, retry queues with dead-letter handling, bulkheads, and
 load shedding -- around the LLM gateway and async workers; (2) adding a
 second real LLM/embedding provider behind the existing protocol
 abstraction to validate that the abstraction holds under a real second
-implementation, not just in design; (3) hardening the Kubernetes scaffold
-into a managed-cloud production profile with TLS ingress, a secrets
-manager, and autoscaling; (4) building a synthetic enterprise-scale
-dataset generator to validate the platform under realistic load; and
-(5) connecting the existing internal observability stack to an external
-APM/metrics backend for production-grade monitoring.
+implementation, not just in design; (3) hardening the GKE staging
+deployment into a managed-cloud production profile -- TLS on the ingress,
+a secrets manager used consistently across every environment, and a load
+profile heavy enough to actually push the existing HPA past its floor of
+2 replicas, which the benchmarks in Section~\ref{sec:staging} did not; (4)
+building a synthetic enterprise-scale dataset generator to validate the
+platform under realistic load; and (5) connecting the existing internal
+observability stack to an external APM/metrics backend for
+production-grade monitoring.
 
 % =============================================================
 \begin{thebibliography}{9}

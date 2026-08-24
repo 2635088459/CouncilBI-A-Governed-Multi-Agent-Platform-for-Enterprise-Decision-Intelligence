@@ -1,0 +1,28 @@
+Task mode: create
+Primary deck-profile: engineering-platform
+Secondary gates: appendix-heavy source discipline for benchmark tables
+
+Required proof objects:
+- Architecture/workflow map for governed multi-agent ChatBI.
+- Metric evidence tied to deployed GKE behavior.
+- Token-efficiency comparison proving SQL/RAG context reduction.
+- Reliability and overload-protection evidence.
+- Correctness and guardrail measurements.
+
+Source/asset requirements:
+- Use only repo-generated benchmark files under dist/report.
+- No fabricated external market or pricing data.
+- No unverified logos or pseudo-brand marks.
+
+Brand authenticity constraints:
+- Use the project name as text only.
+- Do not create unofficial Google/OpenAI marks.
+- Use system colors and technical diagram language instead of brand assets.
+
+Profile-specific QA gates:
+- Diagram labels must be technically specific.
+- Metrics must point to a source file.
+- Claims must distinguish mock-provider staging evidence from real OpenAI billing or quality.
+
+Known missing inputs:
+- No real OpenAI usage/billing eval was run. Token savings are estimator-based.

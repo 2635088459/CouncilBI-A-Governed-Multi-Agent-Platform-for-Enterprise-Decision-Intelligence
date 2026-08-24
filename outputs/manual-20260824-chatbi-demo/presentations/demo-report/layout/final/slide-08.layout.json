@@ -1,0 +1,820 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/ega82l",
+    "id": "ega82l",
+    "slide": 8,
+    "layoutId": "24bf8da2-9936-4ac6-8cd5-e155124f48d0",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "ecd25123-ef34-44bf-b602-75bebc4b01c1",
+    "masterLayoutName": "Master",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Arial",
+      "Georgia"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "24bf8da2-9936-4ac6-8cd5-e155124f48d0",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "ecd25123-ef34-44bf-b602-75bebc4b01c1",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "ecd25123-ef34-44bf-b602-75bebc4b01c1",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/zupwb2hw",
+      "id": "1",
+      "bbox": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#17201B"
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/sfil0rqd",
+      "id": "2",
+      "bbox": [
+        64,
+        38,
+        240,
+        26
+      ],
+      "geometry": "rect",
+      "text": "CLOSE",
+      "textPreview": "CLOSE",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "CLOSE"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "CLOSE",
+          "runs": [
+            {
+              "index": 1,
+              "text": "CLOSE",
+              "fontSize": 13,
+              "typeface": "Arial",
+              "color": "#F4E3C8",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#17201B"
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/h0fepkzu",
+      "id": "3",
+      "bbox": [
+        58,
+        76,
+        780,
+        92
+      ],
+      "geometry": "rect",
+      "text": "The demo story is defensible because every claim has a measurement boundary.",
+      "textPreview": "The demo story is defensible because every claim has a measurement boundary.",
+      "resolvedFontSize": 35,
+      "resolvedTextStyle": {
+        "fontSize": 40,
+        "typeface": "Georgia",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "The demo story is defensible because"
+          },
+          {
+            "index": 2,
+            "text": "every claim has a measurement boundary."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "The demo story is defensible because every claim has a measurement boundary.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "The demo story is defensible because every claim has a measurement boundary.",
+              "fontSize": 40,
+              "typeface": "Georgia",
+              "color": "#F7F2E8",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#17201B"
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/al87ed8b",
+      "id": "4",
+      "bbox": [
+        86,
+        238,
+        1080,
+        64
+      ],
+      "geometry": "rect",
+      "fillColor": "#223028"
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/z61032ls",
+      "id": "5",
+      "bbox": [
+        112,
+        256,
+        120,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Say",
+      "textPreview": "Say",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Say"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Say",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Say",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#F4E3C8",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#223028"
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/orytsvu9",
+      "id": "6",
+      "bbox": [
+        254,
+        255,
+        830,
+        28
+      ],
+      "geometry": "rect",
+      "text": "GKE staging handled stable load with 100% success.",
+      "textPreview": "GKE staging handled stable load with 100% success.",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "GKE staging handled stable load with 100% success."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "GKE staging handled stable load with 100% success.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "GKE staging handled stable load with 100% success.",
+              "fontSize": 20,
+              "typeface": "Arial",
+              "color": "#F7F2E8"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#223028"
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/hcrmhk3q",
+      "id": "7",
+      "bbox": [
+        86,
+        316,
+        1080,
+        64
+      ],
+      "geometry": "rect",
+      "fillColor": "#223028"
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/6xkf6dcb",
+      "id": "8",
+      "bbox": [
+        112,
+        334,
+        120,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Show",
+      "textPreview": "Show",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Show"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Show",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Show",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#F4E3C8",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#223028"
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/zed8v6ps",
+      "id": "9",
+      "bbox": [
+        254,
+        333,
+        830,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Live URL, chat query, trace_id, report-evaluation-summary.md.",
+      "textPreview": "Live URL, chat query, trace_id, report-evaluation-summary.md.",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Live URL, chat query, trace_id, report-evaluation-summary.md."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Live URL, chat query, trace_id, report-evaluation-summary.md.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Live URL, chat query, trace_id, report-evaluation-summary.md.",
+              "fontSize": 20,
+              "typeface": "Arial",
+              "color": "#F7F2E8"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#223028"
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/n29gr2p8",
+      "id": "10",
+      "bbox": [
+        86,
+        394,
+        1080,
+        64
+      ],
+      "geometry": "rect",
+      "fillColor": "#223028"
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/yhgn29gr",
+      "id": "11",
+      "bbox": [
+        112,
+        412,
+        120,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Prove",
+      "textPreview": "Prove",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Prove"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Prove",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Prove",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#F4E3C8",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#223028"
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/58z25kb6",
+      "id": "12",
+      "bbox": [
+        254,
+        411,
+        830,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Latency, correctness, guardrail, recovery, token-efficiency artifacts.",
+      "textPreview": "Latency, correctness, guardrail, recovery, token-efficiency artifacts.",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Latency, correctness, guardrail, recovery, token-efficiency artifacts."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Latency, correctness, guardrail, recovery, token-efficiency artifacts.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Latency, correctness, guardrail, recovery, token-efficiency artifacts.",
+              "fontSize": 20,
+              "typeface": "Arial",
+              "color": "#F7F2E8"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#223028"
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/gn29gr2p",
+      "id": "13",
+      "bbox": [
+        86,
+        472,
+        1080,
+        64
+      ],
+      "geometry": "rect",
+      "fillColor": "#223028"
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/nuxc3ylc",
+      "id": "14",
+      "bbox": [
+        112,
+        490,
+        120,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Be explicit",
+      "textPreview": "Be explicit",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Be explicit"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Be explicit",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Be explicit",
+              "fontSize": 18,
+              "typeface": "Arial",
+              "color": "#F4E3C8",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#223028"
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/y90je9cv",
+      "id": "15",
+      "bbox": [
+        254,
+        489,
+        830,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Mock LLM provider means cloud runtime proof, not real OpenAI billing proof.",
+      "textPreview": "Mock LLM provider means cloud runtime proof, not real OpenAI billing proof.",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Mock LLM provider means cloud runtime proof, not real OpenAI billing proof."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Mock LLM provider means cloud runtime proof, not real OpenAI billing proof.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Mock LLM provider means cloud runtime proof, not real OpenAI billing proof.",
+              "fontSize": 20,
+              "typeface": "Arial",
+              "color": "#F7F2E8"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#223028"
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/5wjudg7a",
+      "id": "16",
+      "bbox": [
+        92,
+        568,
+        240,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Recommended final line",
+      "textPreview": "Recommended final line",
+      "resolvedFontSize": 16,
+      "resolvedTextStyle": {
+        "fontSize": 16,
+        "typeface": "Arial",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Recommended final line"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Recommended final line",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Recommended final line",
+              "fontSize": 16,
+              "typeface": "Arial",
+              "color": "#F4E3C8",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "#17201B"
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/gbq1oryt",
+      "id": "17",
+      "bbox": [
+        92,
+        602,
+        990,
+        52
+      ],
+      "geometry": "rect",
+      "text": "InsightOps AI demonstrates governed enterprise decision intelligence: measured cloud reliability, bounded model context, auditable SQL/RAG execution, and safety controls that fail closed.",
+      "textPreview": "InsightOps AI demonstrates governed enterprise decision intelligence: measured cloud reliability, bounded model context, auditable SQL/RA...",
+      "resolvedFontSize": 21,
+      "resolvedTextStyle": {
+        "fontSize": 21,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "InsightOps AI demonstrates governed enterprise decision intelligence: measured cloud reliability,"
+          },
+          {
+            "index": 2,
+            "text": "bounded model context, auditable SQL/RAG execution, and safety controls that fail closed."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "InsightOps AI demonstrates governed enterprise decision intelligence: measured cloud reliability, bounded model context, auditable SQL/RAG execution, and safety controls that fail closed.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "InsightOps AI demonstrates governed enterprise decision intelligence: measured cloud reliability, bounded model context, auditable SQL/RAG execution, and safety controls that fail closed.",
+              "fontSize": 21,
+              "typeface": "Arial",
+              "color": "#F7F2E8"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#17201B"
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/nqxs72x4",
+      "id": "18",
+      "bbox": [
+        58,
+        676,
+        860,
+        24
+      ],
+      "geometry": "rect",
+      "text": "Source: dist/report/report-evaluation-summary.md",
+      "textPreview": "Source: dist/report/report-evaluation-summary.md",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Arial",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Source: dist/report/report-evaluation-summary.md"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Source: dist/report/report-evaluation-summary.md",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Source: dist/report/report-evaluation-summary.md",
+              "fontSize": 12,
+              "typeface": "Arial",
+              "color": "#AAB4AA"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#17201B"
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/u54zidon",
+      "id": "19",
+      "bbox": [
+        1190,
+        676,
+        42,
+        24
+      ],
+      "geometry": "rect",
+      "text": "08",
+      "textPreview": "08",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Arial",
+        "alignment": "right"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "08"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "08",
+          "runs": [
+            {
+              "index": 1,
+              "text": "08",
+              "fontSize": 12,
+              "typeface": "Arial",
+              "color": "#AAB4AA"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#17201B"
+    }
+  ],
+  "composeRuns": []
+}
