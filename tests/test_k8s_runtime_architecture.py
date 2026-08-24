@@ -72,6 +72,17 @@ def test_backend_and_worker_read_database_url_from_secret_reference() -> None:
         assert "key: DATABASE_URL" in workload
 
 
+def test_backend_and_worker_read_openai_key_from_secret_reference() -> None:
+    text = manifest_text()
+
+    for workload_name in ("backend", "worker"):
+        workload = document_for_resource(text, "Deployment", workload_name)
+        assert "name: OPENAI_API_KEY" in workload
+        assert "secretKeyRef:" in workload
+        assert "name: chatbi-runtime-secrets" in workload
+        assert "key: OPENAI_API_KEY" in workload
+
+
 def test_frontend_deployment_exposes_only_backend_api_url() -> None:
     frontend = document_for_resource(manifest_text(), "Deployment", "frontend")
 
@@ -85,6 +96,7 @@ def test_frontend_deployment_exposes_only_backend_api_url() -> None:
     assert "DATABASE_URL" not in frontend
     assert "REDIS_URL" not in frontend
     assert "VECTOR_STORE_URL" not in frontend
+    assert "OPENAI_API_KEY" not in frontend
 
 
 def test_worker_deployment_receives_stateful_dependency_environment() -> None:
@@ -94,6 +106,8 @@ def test_worker_deployment_receives_stateful_dependency_environment() -> None:
     assert "name: REDIS_URL" in worker
     assert "name: VECTOR_STORE_URL" in worker
     assert "name: CHATBI_USE_POSTGRES_METADATA" in worker
+    assert "name: CHATBI_LLM_PROVIDER" in worker
+    assert "name: CHATBI_LLM_MODEL" in worker
 
 
 def test_redis_and_postgres_have_readiness_checks() -> None:

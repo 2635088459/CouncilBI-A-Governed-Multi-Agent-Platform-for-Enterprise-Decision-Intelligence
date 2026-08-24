@@ -86,7 +86,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       CHATBI_READONLY_PASSWORD: ${CHATBI_READONLY_PASSWORD:?CHATBI_READONLY_PASSWORD is required}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - chatbi_postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro

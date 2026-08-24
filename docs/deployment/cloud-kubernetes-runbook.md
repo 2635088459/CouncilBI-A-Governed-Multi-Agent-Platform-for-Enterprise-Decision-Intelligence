@@ -20,6 +20,8 @@ docker push "$REGISTRY/governed-chatbi-frontend:$IMAGE_TAG"
 
 `DATABASE_URL`, `POSTGRES_PASSWORD`, `OPENAI_API_KEY`, and auth token secrets must
 come from a cloud secret manager or operator-provided environment variables.
+Do not commit generated Secret manifests, shell history exports, or `.env`
+files that contain these values.
 
 ```bash
 kubectl create namespace chatbi --dry-run=client -o yaml | kubectl apply -f -
@@ -32,6 +34,28 @@ kubectl create secret generic chatbi-runtime-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
+For GKE, keep Google Secret Manager as the source of truth and hydrate the
+Kubernetes Secret at deploy time:
+
+```bash
+gcloud secrets versions access latest --secret=chatbi-database-url > /tmp/chatbi-database-url
+gcloud secrets versions access latest --secret=chatbi-postgres-password > /tmp/chatbi-postgres-password
+gcloud secrets versions access latest --secret=chatbi-openai-api-key > /tmp/chatbi-openai-api-key
+gcloud secrets versions access latest --secret=chatbi-auth-token-secret > /tmp/chatbi-auth-token-secret
+
+kubectl create namespace chatbi --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic chatbi-runtime-secrets \
+  --namespace chatbi \
+  --from-file=DATABASE_URL=/tmp/chatbi-database-url \
+  --from-file=POSTGRES_PASSWORD=/tmp/chatbi-postgres-password \
+  --from-file=OPENAI_API_KEY=/tmp/chatbi-openai-api-key \
+  --from-file=CHATBI_AUTH_TOKEN_SECRET=/tmp/chatbi-auth-token-secret \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Only the backend and worker deployments reference `OPENAI_API_KEY`; the frontend
+receives only API routing configuration.
+
 ## 3. Configure Managed Services
 
 Set `REDIS_URL` in `k8s/chatbi-runtime.yaml` or an environment overlay to the
@@ -40,6 +64,10 @@ the manifest.
 
 For staging, use a dedicated managed PostgreSQL database, managed Redis
 instance, and isolated secret namespace.
+
+Set non-secret LLM configuration in `chatbi-runtime-config`, for example
+`CHATBI_LLM_PROVIDER=openai` and `CHATBI_LLM_MODEL=gpt-4o-mini`. Keep provider
+keys in `chatbi-runtime-secrets`.
 
 ## 4. Deploy Staging
 
@@ -66,8 +94,10 @@ curl --fail --max-time 2 "$STAGING_BASE_URL/healthz"
 curl --fail --max-time 2 "$STAGING_BASE_URL/readyz"
 curl --fail --max-time 5 \
   -H "Authorization: Bearer $STAGING_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
   -H "X-Trace-Id: trc_staging_smoke" \
-  "$STAGING_BASE_URL/api/v2/me"
+  -d '{"request_id":"req_staging_smoke","session_id":"ses_staging_smoke","user_id":"u_staging","role":"business_user","locale":"en","question":"Show revenue trend."}' \
+  "$STAGING_BASE_URL/api/v2/chat/query"
 ```
 
 ## 6. Rollback

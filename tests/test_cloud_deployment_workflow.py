@@ -28,7 +28,8 @@ def test_cloud_deployment_workflow_deploys_staging_and_smokes_health_endpoints()
     assert "kubectl rollout status deployment/backend -n chatbi" in text
     assert "$STAGING_BASE_URL/healthz" in text
     assert "$STAGING_BASE_URL/readyz" in text
-    assert "$STAGING_BASE_URL/api/v2/me" in text
+    assert "$STAGING_BASE_URL/api/v2/chat/query" in text
+    assert "req_staging_smoke" in text
 
 
 def test_cloud_deployment_workflow_uses_secrets_not_plaintext_credentials() -> None:

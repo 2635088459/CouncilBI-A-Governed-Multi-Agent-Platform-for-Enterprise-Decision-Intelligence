@@ -10,7 +10,9 @@ metadata:
   namespace: chatbi
 data:
   VECTOR_STORE_URL: memory://local-vector-store
-  CHATBI_USE_POSTGRES_METADATA: "1"
+  CHATBI_USE_POSTGRES_METADATA: "0"
+  CHATBI_LLM_PROVIDER: mock
+  CHATBI_LLM_MODEL: ""
   API_BASE_URL: http://backend:8000
   FRONTEND_ENVIRONMENT: prod
   FRONTEND_LOCALE_DEFAULT: en
@@ -45,7 +47,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: governed-chatbi-platform:latest
+          image: us-central1-docker.pkg.dev/cogent-sweep-506504-b6/chatbi/governed-chatbi-backend:9704a05
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -70,25 +72,51 @@ spec:
                 configMapKeyRef:
                   name: chatbi-runtime-config
                   key: CHATBI_USE_POSTGRES_METADATA
+            - name: CHATBI_LLM_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: chatbi-runtime-config
+                  key: CHATBI_LLM_PROVIDER
+            - name: CHATBI_LLM_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: chatbi-runtime-config
+                  key: CHATBI_LLM_MODEL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: chatbi-runtime-secrets
+                  key: OPENAI_API_KEY
           resources:
             requests:
-              cpu: 250m
+              cpu: 500m
               memory: 512Mi
             limits:
               cpu: "1"
               memory: 1Gi
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8000
-            periodSeconds: 10
-            timeoutSeconds: 3
-          livenessProbe:
+          startupProbe:
             httpGet:
               path: /healthz
               port: 8000
             periodSeconds: 10
             timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -142,7 +170,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: governed-chatbi-frontend:latest
+          image: us-central1-docker.pkg.dev/cogent-sweep-506504-b6/chatbi/governed-chatbi-frontend:9704a05
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
@@ -231,7 +259,7 @@ spec:
     spec:
       containers:
         - name: worker
-          image: governed-chatbi-platform:latest
+          image: us-central1-docker.pkg.dev/cogent-sweep-506504-b6/chatbi/governed-chatbi-worker:9704a05
           imagePullPolicy: IfNotPresent
           command:
             - python
@@ -258,6 +286,21 @@ spec:
                 configMapKeyRef:
                   name: chatbi-runtime-config
                   key: CHATBI_USE_POSTGRES_METADATA
+            - name: CHATBI_LLM_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: chatbi-runtime-config
+                  key: CHATBI_LLM_PROVIDER
+            - name: CHATBI_LLM_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: chatbi-runtime-config
+                  key: CHATBI_LLM_MODEL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: chatbi-runtime-secrets
+                  key: OPENAI_API_KEY
           resources:
             requests:
               cpu: 250m

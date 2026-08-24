@@ -30,7 +30,8 @@ def test_cloud_runbook_documents_smoke_and_rollback_commands() -> None:
 
     assert "$STAGING_BASE_URL/healthz" in text
     assert "$STAGING_BASE_URL/readyz" in text
-    assert "$STAGING_BASE_URL/api/v2/me" in text
+    assert "$STAGING_BASE_URL/api/v2/chat/query" in text
+    assert "req_staging_smoke" in text
     assert "python -m pytest tests/test_runtime_latency_smoke.py" in text
     assert "kubectl rollout history deployment/backend -n chatbi" in text
     assert "kubectl rollout undo deployment/backend -n chatbi" in text

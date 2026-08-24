@@ -116,8 +116,10 @@ jobs:
           test -n "$STAGING_AUTH_TOKEN"
           curl --fail --max-time 5 \
             -H "Authorization: Bearer $STAGING_AUTH_TOKEN" \
+            -H "Content-Type: application/json" \
             -H "X-Trace-Id: trc_staging_smoke" \
-            "$STAGING_BASE_URL/api/v2/me"
+            -d '{"request_id":"req_staging_smoke","session_id":"ses_staging_smoke","user_id":"u_staging","role":"business_user","locale":"en","question":"Show revenue trend."}' \
+            "$STAGING_BASE_URL/api/v2/chat/query"
 
       - name: Print rollback command
         if: failure()
